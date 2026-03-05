@@ -1,0 +1,53 @@
+from building import *
+import os
+
+cwd  = GetCurrentDir()
+
+# ── Include paths ────────────────────────────────────────────────
+path = [cwd]
+
+# Edge Impulse SDK root (for TFLite Micro and CMSIS-DSP headers
+# used by cough_infer.cpp)
+ei_base = os.path.normpath(os.path.join(cwd, '..', '..', 'edge-impulse'))
+ei_sdk  = os.path.join(ei_base, 'edge-impulse-sdk')
+
+path += [ei_sdk]
+
+# TensorFlow Lite Micro
+path += [os.path.join(ei_sdk, 'tensorflow')]
+path += [os.path.join(ei_sdk, 'tensorflow', 'lite')]
+path += [os.path.join(ei_sdk, 'tensorflow', 'lite', 'micro')]
+path += [os.path.join(ei_sdk, 'tensorflow', 'lite', 'c')]
+path += [os.path.join(ei_sdk, 'tensorflow', 'lite', 'core')]
+path += [os.path.join(ei_sdk, 'tensorflow', 'lite', 'core', 'c')]
+path += [os.path.join(ei_sdk, 'tensorflow', 'lite', 'kernels')]
+path += [os.path.join(ei_sdk, 'tensorflow', 'lite', 'kernels', 'internal')]
+
+# Third-party (FlatBuffers, gemmlowp, ruy)
+path += [os.path.join(ei_sdk, 'third_party', 'flatbuffers', 'include')]
+path += [os.path.join(ei_sdk, 'third_party', 'gemmlowp')]
+path += [os.path.join(ei_sdk, 'third_party', 'ruy')]
+
+# CMSIS (DSP + NN + Core)
+path += [os.path.join(ei_sdk, 'CMSIS', 'Core', 'Include')]
+path += [os.path.join(ei_sdk, 'CMSIS', 'DSP', 'Include')]
+path += [os.path.join(ei_sdk, 'CMSIS', 'DSP', 'PrivateInclude')]
+path += [os.path.join(ei_sdk, 'CMSIS', 'NN', 'Include')]
+
+# ── Source files (C + C++) ───────────────────────────────────────
+src  = Glob('*.c') + Glob('*.cpp')
+
+# ── Compiler flags for this module ───────────────────────────────
+LOCAL_CFLAGS   = ' -DTF_LITE_STATIC_MEMORY'
+LOCAL_CFLAGS  += ' -DARM_MATH_CM55 -DARM_MATH_DSP -DARM_MATH_LOOPUNROLL -DARM_MATH_AUTOVECTORIZE'
+
+LOCAL_CXXFLAGS  = LOCAL_CFLAGS
+LOCAL_CXXFLAGS += ' -std=c++17 -fno-rtti -fno-exceptions -fno-threadsafe-statics'
+LOCAL_CXXFLAGS += ' -Wno-sign-compare -Wno-strict-aliasing'
+
+group = DefineGroup('cough_detect', src, depend = [''],
+                    CPPPATH = path,
+                    LOCAL_CFLAGS = LOCAL_CFLAGS,
+                    LOCAL_CXXFLAGS = LOCAL_CXXFLAGS)
+
+Return('group')
