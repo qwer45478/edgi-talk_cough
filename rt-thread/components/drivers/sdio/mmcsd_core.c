@@ -644,7 +644,9 @@ void mmcsd_detect(void *param)
                 if (!err)
                 {
                     if (init_sdio(host, ocr))
+                    {
                         mmcsd_power_off(host);
+                    }
                     mmcsd_host_unlock(host);
                     continue;
                 }

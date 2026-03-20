@@ -46,5 +46,20 @@
 
 void cy_bsp_all_init(void);
 
+typedef enum
+{
+    EDGI_BOARD_POWER_MAIN = 0,
+    EDGI_BOARD_POWER_WIFI,
+    EDGI_BOARD_POWER_AUDIO_CODEC,
+    EDGI_BOARD_POWER_SPEAKER,
+    EDGI_BOARD_POWER_DISPLAY,
+    EDGI_BOARD_POWER_DISPLAY_BACKLIGHT,
+} edgi_board_power_domain_t;
+
+int edgi_board_power_init(void);
+int edgi_board_set_power_domain(edgi_board_power_domain_t domain, rt_bool_t enabled);
+int edgi_board_set_display_brightness(rt_uint8_t percent);
+int edgi_board_poweroff_system(void);
+
 #endif
 

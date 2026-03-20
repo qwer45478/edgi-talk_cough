@@ -592,8 +592,6 @@ static void whd_init_thread (void *parameter)
         return;
     }
 
-    LOG_D("Wait for sdio card registration..");
-
     /* Waiting card registration and delete the semaphore */
     rt_sem_take(cyhal_sdio.probe, RT_WAITING_FOREVER);
     rt_sem_delete(cyhal_sdio.probe);

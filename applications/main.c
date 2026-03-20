@@ -12,16 +12,45 @@
 #include <rtdevice.h>
 #include <board.h>
 
+#include "common/app_common.h"
+#include "common/common_env.h"
+#include "common/common_storage.h"
+#include "cough_detect/cough_stat.h"
+#include "cough_ui/cough_ui.h"
+
 #define DBG_TAG    "main"
 #define DBG_LVL    DBG_INFO
 #include <rtdbg.h>
 
 /* Cough detection module */
 extern int cough_detect_init(void);
-extern void cough_ui_init(void);
-extern rt_err_t cough_ui_wait_ready(rt_int32_t timeout);
 
 #define UI_INIT_TIMEOUT_MS  5000
+#define ENV_SAMPLE_INTERVAL_MS  30000   /* read AHT20 every 30s */
+#define UI_REFRESH_INTERVAL_MS  5000    /* push env/stats to UI every 5s */
+
+/* ── Periodic UI refresh timer ──────────────────────────────────── */
+static struct rt_timer s_ui_refresh_timer;
+
+static void ui_refresh_callback(void *param)
+{
+    (void)param;
+
+    /* Push environment data to UI */
+    const common_env_sample_t *env = common_env_get_cached();
+    if (env && env->valid)
+    {
+        cough_ui_update_env(env->temperature_c, env->humidity_pct);
+    }
+
+    /* Push statistics to UI */
+    const cough_stat_daily_t *stats = cough_stat_get_daily();
+    if (stats)
+    {
+        cough_ui_update_stats(stats->total_today, stats->day_count,
+                              stats->night_count, stats->burst_count);
+    }
+}
 
 /*****************************************************************************
  * Main Entry (Cortex-M55 core)
@@ -29,6 +58,15 @@ extern rt_err_t cough_ui_wait_ready(rt_int32_t timeout);
 int main(void)
 {
     LOG_I("Cough/Snore Detection System starting...");
+
+    app_common_init(APP_COMMON_INIT_BASE);
+    app_common_dump_status();
+
+    /* Ensure storage directories exist */
+    common_storage_ensure_dirs();
+
+    /* Start periodic environment sampling */
+    common_env_start_periodic(ENV_SAMPLE_INTERVAL_MS);
 
     cough_ui_init();
     if (cough_ui_wait_ready(rt_tick_from_millisecond(UI_INIT_TIMEOUT_MS)) != RT_EOK)
@@ -47,6 +85,13 @@ int main(void)
         LOG_E("Failed to initialize cough detection!");
         return -1;
     }
+
+    /* Start periodic UI refresh (env + stats → display) */
+    rt_timer_init(&s_ui_refresh_timer, "ui_rfsh",
+                  ui_refresh_callback, RT_NULL,
+                  rt_tick_from_millisecond(UI_REFRESH_INTERVAL_MS),
+                  RT_TIMER_FLAG_PERIODIC | RT_TIMER_FLAG_SOFT_TIMER);
+    rt_timer_start(&s_ui_refresh_timer);
 
     LOG_I("System ready. Press the button to calibrate noise baseline.");
     return 0;

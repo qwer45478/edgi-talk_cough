@@ -21,10 +21,21 @@
 #include <string.h>
 #include "cough_ui.h"
 #include "cough_infer.h"
+#include "cough_stat.h"
+#include "cough_record.h"
+#include "cough_remind.h"
+#include "../common/common_network.h"
+#include "../common/common_led.h"
 
 #define DBG_TAG "cough"
 #define DBG_LVL DBG_INFO
 #include <rtdbg.h>
+
+/* High-rate inference logs can flood UART; keep disabled by default. */
+#define CD_STREAM_LOG_ENABLE 0
+
+/* Periodic upload interval (10 minutes) */
+#define CD_UPLOAD_INTERVAL_MS   (10 * 60 * 1000)
 
 /* Minimum cough confidence score to trigger an event – kept in detect.h */
 
@@ -46,6 +57,12 @@ static rt_mutex_t s_ring_mutex = RT_NULL;
 static cd_state_t   s_state    = CD_STATE_IDLE;
 static float        s_baseline = 0.0f;
 static rt_event_t   s_event    = RT_NULL;
+
+void cough_detect_send_event(rt_uint32_t event_set)
+{
+    if (s_event != RT_NULL)
+        rt_event_send(s_event, event_set);
+}
 static rt_device_t  s_mic_dev  = RT_NULL;
 static rt_tick_t    s_last_ui_tick = 0;
 
@@ -128,6 +145,12 @@ static void mic_thread_entry(void *param)
             s_ring_wr++;
         }
         rt_mutex_release(s_ring_mutex);
+
+        /* Feed audio to recorder if recording is active */
+        if (cough_record_get_state() == RECORD_STATE_RECORDING)
+        {
+            cough_record_feed(frame, CD_FRAME_SAMPLES);
+        }
 
         rt_tick_t now = rt_tick_get();
         rt_uint16_t peak = frame_peak_abs(frame, CD_FRAME_SAMPLES);
@@ -265,7 +288,9 @@ static void infer_thread_entry(void *param)
             {
                 if (!energy_triggered)
                 {
+#if CD_STREAM_LOG_ENABLE
                     LOG_I("Energy gate OPEN: e=%.0f > thr=%.0f", energy, s_baseline * CD_SNR_FACTOR);
+#endif
                 }
                 energy_triggered = RT_TRUE;
             }
@@ -302,18 +327,24 @@ static void infer_thread_entry(void *param)
                                                   scores);
                     if (ret == 0)
                     {
-                        /* Always print — essential for tuning the threshold */
+#if CD_STREAM_LOG_ENABLE
+                        /* High-rate tuning log (disabled by default). */
                         rt_kprintf("[INF] u=%.2f c=%.2f n=%.2f%s\r\n",
                                    scores[COUGH_INFER_IDX_UNLABELLED],
                                    scores[COUGH_INFER_IDX_COUGH],
                                    scores[COUGH_INFER_IDX_NOISE],
                                    energy_triggered ? " *" : "");
+#endif
 
                         if (scores[COUGH_INFER_IDX_COUGH] > CD_COUGH_THRESHOLD)
                         {
                             LOG_I("*** COUGH DETECTED! score=%.2f ***",
                                   scores[COUGH_INFER_IDX_COUGH]);
                             cough_ui_push_cough_event();
+                            cough_stat_record_event(scores[COUGH_INFER_IDX_COUGH]);
+
+                            /* Flash LED on cough detection */
+                            common_led_set_mode(LED_MODE_BLINK_ONCE);
                         }
                     }
                     else
@@ -336,6 +367,28 @@ static void infer_thread_entry(void *param)
 }
 
 /* ─────────────────────────────────────────────────────────────────── */
+/*  Recording done callback                                            */
+/* ─────────────────────────────────────────────────────────────────── */
+static void record_done_callback(const char *wav_path, void *user_data)
+{
+    RT_UNUSED(user_data);
+    LOG_I("Recording chunk completed: %s", wav_path);
+    rt_event_send(s_event, CD_EVENT_CHUNK_DONE);
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
+/*  Periodic upload timer callback                                     */
+/* ─────────────────────────────────────────────────────────────────── */
+static rt_timer_t s_upload_timer = RT_NULL;
+
+static void upload_timer_callback(void *parameter)
+{
+    RT_UNUSED(parameter);
+    /* Only send event — heavy work done in control thread to avoid timer stack overflow */
+    rt_event_send(s_event, CD_EVENT_UPLOAD_TICK);
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
 /*  Control thread — state machine                                     */
 /* ─────────────────────────────────────────────────────────────────── */
 static void control_thread_entry(void *param)
@@ -347,7 +400,9 @@ static void control_thread_entry(void *param)
         /* Wait for any event, no timeout */
         rt_event_recv(s_event,
                       CD_EVENT_KEY_DOWN | CD_EVENT_KEY_UP |
-                      CD_EVENT_TRIGGERED | CD_EVENT_CHUNK_DONE,
+                      CD_EVENT_TRIGGERED | CD_EVENT_CHUNK_DONE |
+                      CD_EVENT_UPLOAD_TICK | CD_EVENT_REMIND_FIRE |
+                      CD_EVENT_STAT_FLUSH,
                       RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
                       RT_WAITING_FOREVER,
                       &recv);
@@ -386,29 +441,70 @@ static void control_thread_entry(void *param)
                 LOG_I("[STATE] → RECORDING  (5-minute chunk started)");
                 s_state = CD_STATE_RECORDING;
                 cough_ui_set_state_text("RECORD");
-                /*
-                 * [STAGE 3 TODO] Start writing audio to SD card.
-                 * Launch a timed recording task that fires CD_EVENT_CHUNK_DONE
-                 * after CD_RECORD_DURATION_S seconds.
-                 */
+                common_led_set_mode(LED_MODE_BLINK_SLOW);
+
+                /* Start WAV recording to SD card */
+                if (cough_record_start(record_done_callback, RT_NULL) != RT_EOK)
+                {
+                    LOG_W("Recording start failed, returning to LISTENING");
+                    s_state = CD_STATE_LISTENING;
+                    cough_ui_set_state_text("LISTEN");
+                    common_led_set_mode(LED_MODE_ON);
+                }
             }
+        }
+
+        /* ── Periodic stats upload (from timer) ─────────────────── */
+        if (recv & CD_EVENT_UPLOAD_TICK)
+        {
+            if (common_network_is_ready())
+            {
+                char json_buf[512];
+                cough_stat_to_json(json_buf, sizeof(json_buf));
+                int result = common_network_upload_json("/api/cough/stats", json_buf);
+                if (result == RT_EOK)
+                    LOG_I("Stats uploaded to cloud");
+            }
+        }
+
+        /* ── Reminder alert (from timer) ──────────────────────────── */
+        if (recv & CD_EVENT_REMIND_FIRE)
+        {
+            cough_remind_do_alert();
+        }
+
+        /* ── Midnight stats flush (from timer) ────────────────────── */
+        if (recv & CD_EVENT_STAT_FLUSH)
+        {
+            cough_stat_flush_to_storage();
         }
 
         /* ── Chunk complete → upload then resume listening ────────── */
         if (recv & CD_EVENT_CHUNK_DONE)
         {
-            LOG_I("[STATE] → UPLOADING  (sending file to server)");
+            LOG_I("[STATE] → UPLOADING  (sending stats to server)");
             s_state = CD_STATE_UPLOADING;
             cough_ui_set_state_text("UPLOAD");
-            /*
-             * [STAGE 5 TODO] HTTP POST the WAV file to the web server.
-             * On success, send CD_EVENT_KEY_UP equivalent to return to LISTENING.
-             */
 
-            /* For now, immediately go back to listening */
-            LOG_I("[STATE] → LISTENING  (chunk uploaded, resuming)");
+            /* Upload stats JSON */
+            if (common_network_is_ready())
+            {
+                char json_buf[512];
+                cough_stat_to_json(json_buf, sizeof(json_buf));
+                common_network_upload_json("/api/cough/stats", json_buf);
+            }
+            else
+            {
+                /* Cache stats to SD card for later upload */
+                cough_stat_flush_to_storage();
+                LOG_I("Network offline, stats cached to SD card");
+            }
+
+            /* Resume listening */
+            LOG_I("[STATE] → LISTENING  (chunk processed, resuming)");
             s_state = CD_STATE_LISTENING;
             cough_ui_set_state_text("LISTEN");
+            common_led_set_mode(LED_MODE_ON);
         }
     }
 }
@@ -463,7 +559,24 @@ int cough_detect_init(void)
         /* Continue anyway — mic + UI still work, inference just won't run */
     }
 
-    /* 5. Start the three worker threads */
+    /* 5. Initialize statistics, recording, and reminder subsystems */
+    cough_stat_init();
+    cough_record_init();
+    cough_remind_init();
+
+    /* 6. Start periodic stats upload timer */
+    s_upload_timer = rt_timer_create("cd_upl", upload_timer_callback, RT_NULL,
+                                     rt_tick_from_millisecond(CD_UPLOAD_INTERVAL_MS),
+                                     RT_TIMER_FLAG_PERIODIC | RT_TIMER_FLAG_SOFT_TIMER);
+    if (s_upload_timer != RT_NULL)
+    {
+        rt_timer_start(s_upload_timer);
+    }
+
+    /* LED: steady on means system active */
+    common_led_set_mode(LED_MODE_ON);
+
+    /* 7. Start the three worker threads */
     rt_thread_t t;
 
     t = rt_thread_create("cd_mic", mic_thread_entry, RT_NULL,

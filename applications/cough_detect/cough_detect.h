@@ -49,6 +49,9 @@ extern "C" {
 #define CD_EVENT_KEY_UP         (1 << 1)  /* end calibration, start listening */
 #define CD_EVENT_TRIGGERED      (1 << 2)  /* energy threshold crossed  */
 #define CD_EVENT_CHUNK_DONE     (1 << 3)  /* 5-min chunk complete      */
+#define CD_EVENT_UPLOAD_TICK    (1 << 4)  /* periodic stats upload     */
+#define CD_EVENT_REMIND_FIRE    (1 << 5)  /* reminder alert triggered  */
+#define CD_EVENT_STAT_FLUSH     (1 << 6)  /* midnight stats flush      */
 
 /* ── System state ────────────────────────────────────────────────── */
 typedef enum {
@@ -78,6 +81,11 @@ cd_state_t cough_detect_get_state(void);
  * Valid after at least one calibration has completed.
  */
 float cough_detect_get_baseline(void);
+
+/**
+ * Send an event to the control thread (thread-safe, callable from timer/ISR).
+ */
+void cough_detect_send_event(rt_uint32_t event_set);
 
 #ifdef __cplusplus
 }

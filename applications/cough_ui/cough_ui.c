@@ -15,6 +15,7 @@
 #include <rtthread.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <lvgl.h>
 
 #define DBG_TAG    "cough.ui"
@@ -68,6 +69,9 @@ typedef enum
     UI_CMD_SET_STATE = 0,
     UI_CMD_PUSH_LEVEL,
     UI_CMD_COUGH_EVENT,
+    UI_CMD_REMINDER,
+    UI_CMD_UPDATE_ENV,
+    UI_CMD_UPDATE_STATS,
 } ui_cmd_t;
 
 typedef struct
@@ -103,6 +107,21 @@ static lv_obj_t *s_info_panel      = RT_NULL;
 static lv_obj_t *s_label_cough_cnt = RT_NULL;
 static lv_obj_t *s_label_cough_hdr = RT_NULL;
 static lv_obj_t *s_label_info      = RT_NULL;
+
+/* ── New widgets for stats/env/reminder ────────────────────────── */
+static lv_obj_t *s_label_env       = RT_NULL;   /* temperature + humidity    */
+static lv_obj_t *s_label_remind    = RT_NULL;   /* next reminder text        */
+static lv_obj_t *s_label_stats     = RT_NULL;   /* day/night/burst counts    */
+static lv_obj_t *s_label_day_cnt   = RT_NULL;
+static lv_obj_t *s_label_night_cnt = RT_NULL;
+
+/* Cached stats for info panel */
+static rt_uint32_t s_stat_total    = 0;
+static rt_uint32_t s_stat_day      = 0;
+static rt_uint32_t s_stat_night    = 0;
+static rt_uint32_t s_stat_bursts   = 0;
+static float       s_env_temp      = 0.0f;
+static float       s_env_hum       = 0.0f;
 
 static uint32_t  s_cough_count     = 0;
 static uint16_t  s_last_peak       = 0;
@@ -322,12 +341,12 @@ static void ui_build(void)
     lv_obj_set_style_text_font(s_label_bar_max, &lv_font_montserrat_12, LV_PART_MAIN);
     lv_obj_align(s_label_bar_max, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 
-    /* ─── 4. Bottom info row: cough counter + info ─────────────── */
-    /* Cough counter (left) */
-    lv_obj_t *cnt_card = create_card(scr, 160, 230);
+    /* ─── 4. Bottom info row: cough counter + stats + env ─────── */
+    /* Cough counter (left, narrower) */
+    lv_obj_t *cnt_card = create_card(scr, 120, 120);
     lv_obj_set_pos(cnt_card, 12, 546);
 
-    s_label_cough_hdr = create_section_label(cnt_card, "COUGH COUNT");
+    s_label_cough_hdr = create_section_label(cnt_card, "COUGH");
     lv_obj_align(s_label_cough_hdr, LV_ALIGN_TOP_MID, 0, 0);
 
     s_label_cough_cnt = lv_label_create(cnt_card);
@@ -336,9 +355,43 @@ static void ui_build(void)
     lv_obj_set_style_text_font(s_label_cough_cnt, &lv_font_montserrat_24, LV_PART_MAIN);
     lv_obj_align(s_label_cough_cnt, LV_ALIGN_CENTER, 0, 10);
 
-    /* Info panel (right) */
-    s_info_panel = create_card(scr, CONTENT_W - 160 - 12, 230);
-    lv_obj_set_pos(s_info_panel, 12 + 160 + 12, 546);
+    /* Day/Night stats (middle) */
+    lv_obj_t *stats_card = create_card(scr, 120, 120);
+    lv_obj_set_pos(stats_card, 12 + 120 + 8, 546);
+
+    s_label_stats = create_section_label(stats_card, "DAY/NIGHT");
+    lv_obj_align(s_label_stats, LV_ALIGN_TOP_MID, 0, 0);
+
+    s_label_day_cnt = lv_label_create(stats_card);
+    lv_label_set_text(s_label_day_cnt, LV_SYMBOL_IMAGE " 0");
+    lv_obj_set_style_text_color(s_label_day_cnt, lv_color_hex(CLR_ACCENT_AMBER), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_label_day_cnt, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_align(s_label_day_cnt, LV_ALIGN_LEFT_MID, 0, 4);
+
+    s_label_night_cnt = lv_label_create(stats_card);
+    lv_label_set_text(s_label_night_cnt, LV_SYMBOL_EYE_CLOSE " 0");
+    lv_obj_set_style_text_color(s_label_night_cnt, lv_color_hex(CLR_ACCENT_CYAN), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_label_night_cnt, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_align(s_label_night_cnt, LV_ALIGN_LEFT_MID, 0, 28);
+
+    /* Environment card (right) */
+    lv_obj_t *env_card = create_card(scr, CONTENT_W - 120 - 120 - 16, 120);
+    lv_obj_set_pos(env_card, 12 + 120 + 8 + 120 + 8, 546);
+
+    lv_obj_t *env_hdr = create_section_label(env_card, "ENVIRONMENT");
+    lv_obj_align(env_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_label_env = lv_label_create(env_card);
+    lv_label_set_text(s_label_env, "-- \xC2\xB0""C\n-- %RH");
+    lv_obj_set_style_text_color(s_label_env, lv_color_hex(CLR_ACCENT_GREEN), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_label_env, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_line_space(s_label_env, 8, LV_PART_MAIN);
+    lv_obj_align(s_label_env, LV_ALIGN_LEFT_MID, 0, 8);
+
+    /* ─── 5. Info + Reminder row ───────────────────────────────── */
+    /* Info panel */
+    s_info_panel = create_card(scr, CONTENT_W - 160 - 12, 120);
+    lv_obj_set_pos(s_info_panel, 12, 676);
 
     lv_obj_t *info_hdr = create_section_label(s_info_panel, "SYSTEM INFO");
     lv_obj_align(info_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -347,12 +400,26 @@ static void ui_build(void)
     lv_label_set_text(s_label_info,
         "State : IDLE\n"
         "Peak  : 0\n"
-        "Base  : --\n"
-        "Cough : 0");
+        "Burst : 0");
     lv_obj_set_style_text_color(s_label_info, lv_color_hex(CLR_ACCENT_GREEN), LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_label_info, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_set_style_text_line_space(s_label_info, 10, LV_PART_MAIN);
-    lv_obj_align(s_label_info, LV_ALIGN_TOP_LEFT, 0, 24);
+    lv_obj_set_style_text_font(s_label_info, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_line_space(s_label_info, 6, LV_PART_MAIN);
+    lv_obj_align(s_label_info, LV_ALIGN_TOP_LEFT, 0, 20);
+
+    /* Reminder panel */
+    lv_obj_t *remind_card = create_card(scr, 160, 120);
+    lv_obj_set_pos(remind_card, 12 + (CONTENT_W - 160 - 12) + 12, 676);
+
+    lv_obj_t *remind_hdr = create_section_label(remind_card, "REMINDER");
+    lv_obj_align(remind_hdr, LV_ALIGN_TOP_MID, 0, 0);
+
+    s_label_remind = lv_label_create(remind_card);
+    lv_label_set_text(s_label_remind, "No reminder");
+    lv_obj_set_style_text_color(s_label_remind, lv_color_hex(CLR_TEXT_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_label_remind, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_line_space(s_label_remind, 4, LV_PART_MAIN);
+    lv_obj_set_width(s_label_remind, lv_pct(100));
+    lv_obj_align(s_label_remind, LV_ALIGN_CENTER, 0, 8);
 }
 
 /* ================================================================
@@ -419,11 +486,10 @@ static void ui_handle_level(rt_uint16_t level)
         lv_label_set_text_fmt(s_label_info,
             "State : %s\n"
             "Peak  : %u\n"
-            "Base  : --\n"
-            "Cough : %lu",
+            "Burst : %lu",
             state_str,
             level,
-            (unsigned long)s_cough_count);
+            (unsigned long)s_stat_bursts);
     }
 }
 
@@ -527,7 +593,7 @@ static void ui_handle_state(const char *text)
             lv_obj_set_style_bg_color(s_status_dot,
                                       lv_color_hex(CLR_TEXT_MUTED), LV_PART_MAIN);
         }
-        else if (rt_strcmp(text, "RECORDING") == 0)
+        else if (rt_strcmp(text, "RECORDING") == 0 || rt_strcmp(text, "RECORD") == 0)
         {
             lv_obj_set_style_bg_color(s_status_dot,
                                       lv_color_hex(CLR_ACCENT_RED), LV_PART_MAIN);
@@ -537,6 +603,51 @@ static void ui_handle_state(const char *text)
             lv_obj_set_style_bg_color(s_status_dot,
                                       lv_color_hex(CLR_ACCENT_GREEN), LV_PART_MAIN);
         }
+    }
+}
+
+/* ── New handlers for env/stats/reminder ────────────────────────── */
+static void ui_handle_reminder(const char *label)
+{
+    if (s_label_remind)
+    {
+        lv_label_set_text(s_label_remind, label);
+        lv_obj_set_style_text_color(s_label_remind,
+                                    lv_color_hex(CLR_ACCENT_AMBER), LV_PART_MAIN);
+    }
+}
+
+static void ui_handle_env(const char *data)
+{
+    /* data format: "temp,hum" */
+    float temp = 0.0f, hum = 0.0f;
+    sscanf(data, "%f,%f", &temp, &hum);
+    s_env_temp = temp;
+    s_env_hum = hum;
+
+    if (s_label_env)
+    {
+        lv_label_set_text_fmt(s_label_env, "%.1f \xC2\xB0""C\n%.1f %%RH", temp, hum);
+    }
+}
+
+static void ui_handle_stats(const char *data)
+{
+    /* data format: "total,day,night,bursts" */
+    unsigned long total = 0, day = 0, night = 0, bursts = 0;
+    sscanf(data, "%lu,%lu,%lu,%lu", &total, &day, &night, &bursts);
+    s_stat_total = (rt_uint32_t)total;
+    s_stat_day   = (rt_uint32_t)day;
+    s_stat_night = (rt_uint32_t)night;
+    s_stat_bursts = (rt_uint32_t)bursts;
+
+    if (s_label_day_cnt)
+    {
+        lv_label_set_text_fmt(s_label_day_cnt, LV_SYMBOL_IMAGE " %lu", day);
+    }
+    if (s_label_night_cnt)
+    {
+        lv_label_set_text_fmt(s_label_night_cnt, LV_SYMBOL_EYE_CLOSE " %lu", night);
     }
 }
 
@@ -557,6 +668,18 @@ static void ui_process_message(const ui_msg_t *msg)
 
     case UI_CMD_COUGH_EVENT:
         ui_handle_cough_event();
+        break;
+
+    case UI_CMD_REMINDER:
+        ui_handle_reminder(msg->data);
+        break;
+
+    case UI_CMD_UPDATE_ENV:
+        ui_handle_env(msg->data);
+        break;
+
+    case UI_CMD_UPDATE_STATS:
+        ui_handle_stats(msg->data);
         break;
 
     default:
@@ -664,4 +787,26 @@ void cough_ui_push_level(rt_uint16_t level)
 void cough_ui_push_cough_event(void)
 {
     ui_send(UI_CMD_COUGH_EVENT, RT_NULL);
+}
+
+void cough_ui_push_reminder(const char *label)
+{
+    ui_send(UI_CMD_REMINDER, label ? label : "Reminder");
+}
+
+void cough_ui_update_env(float temp, float hum)
+{
+    char tmp[32];
+    rt_snprintf(tmp, sizeof(tmp), "%.1f,%.1f", temp, hum);
+    ui_send(UI_CMD_UPDATE_ENV, tmp);
+}
+
+void cough_ui_update_stats(rt_uint32_t total, rt_uint32_t day,
+                           rt_uint32_t night, rt_uint32_t bursts)
+{
+    char tmp[48];
+    rt_snprintf(tmp, sizeof(tmp), "%lu,%lu,%lu,%lu",
+                (unsigned long)total, (unsigned long)day,
+                (unsigned long)night, (unsigned long)bursts);
+    ui_send(UI_CMD_UPDATE_STATS, tmp);
 }
