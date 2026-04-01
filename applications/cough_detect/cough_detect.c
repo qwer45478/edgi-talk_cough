@@ -7,7 +7,7 @@
  *   │  mic_thread  │ ──ring_buffer──► │ infer_thread    │
  *   │  (reader)    │                  │ (EI classifier) │
  *   └──────────────┘                  └────────┬────────┘
- *                                              │ CD_EVENT_TRIGGERED
+ *                                              │ CD_EVENT_COUGH
  *                                    ┌─────────▼────────┐
  *                                    │ control_thread   │
  *                                    │ (state machine)  │
@@ -26,6 +26,8 @@
 #include "cough_remind.h"
 #include "../common/common_network.h"
 #include "../common/common_led.h"
+#include "../common/common_env.h"
+#include "../common/common_storage.h"
 
 #define DBG_TAG "cough"
 #define DBG_LVL DBG_INFO
@@ -42,8 +44,9 @@
 /* ─────────────────────────────────────────────────────────────────── */
 /*  Ring buffer: mic_thread writes, infer_thread reads                 */
 /* ─────────────────────────────────────────────────────────────────── */
-/* Hold 1 second of audio.  Power-of-two size keeps the modulo cheap. */
-#define RING_BUF_FRAMES     100                         /* ~1 s        */
+/* Hold 3.5 seconds of audio for pre-trigger snapshot.
+ * 560 frames × 160 samples = 89 600 samples ≈ 175 KB in SOCMEM.      */
+#define RING_BUF_FRAMES     560                         /* ~3.5 s      */
 #define RING_BUF_SAMPLES    (RING_BUF_FRAMES * CD_FRAME_SAMPLES)
 
 static int16_t  s_ring_buf[RING_BUF_SAMPLES] __attribute__((section(".cy_socmem_bss")));
@@ -101,23 +104,18 @@ static rt_uint16_t frame_peak_abs(const int16_t *samples, uint32_t n)
 }
 
 /* ─────────────────────────────────────────────────────────────────── */
-/*  Button ISR + debounce                                              */
+/*  Button ISR — toggle navigation bar only                            */
 /* ─────────────────────────────────────────────────────────────────── */
 static void button_irq_handler(void *args)
 {
     rt_base_t level = rt_pin_read(CD_BUTTON_PIN);
 
-    /* RT-Thread pin IRQ fires on both edges; we distinguish by level  */
     if (level == PIN_LOW)
     {
-        /* Key pressed → start calibration */
-        rt_event_send(s_event, CD_EVENT_KEY_DOWN);
+        /* Key pressed → toggle bottom navigation bar */
+        cough_ui_nav_toggle();
     }
-    else
-    {
-        /* Key released → end calibration, enter listening */
-        rt_event_send(s_event, CD_EVENT_KEY_UP);
-    }
+    /* Ignore release edge */
 }
 
 /* ─────────────────────────────────────────────────────────────────── */
@@ -146,8 +144,8 @@ static void mic_thread_entry(void *param)
         }
         rt_mutex_release(s_ring_mutex);
 
-        /* Feed audio to recorder if recording is active */
-        if (cough_record_get_state() == RECORD_STATE_RECORDING)
+        /* Feed audio to recorder if post-trigger capture is active */
+        if (cough_record_get_state() == RECORD_STATE_POST_CAPTURE)
         {
             cough_record_feed(frame, CD_FRAME_SAMPLES);
         }
@@ -274,6 +272,12 @@ static void infer_thread_entry(void *param)
                 LOG_I("Noise baseline = %.1f  (over %u frames)", s_baseline, calib_cnt);
                 calib_sum = 0.0f;
                 calib_cnt = 0;
+
+                /* Auto-transition to LISTENING once calibration is done */
+                LOG_I("[STATE] → LISTENING  (baseline=%.1f, threshold=%.1f)",
+                      s_baseline, s_baseline * CD_SNR_FACTOR);
+                s_state = CD_STATE_LISTENING;
+                cough_ui_set_state_text("LISTEN");
             }
             buf_pos = 0;
             energy_triggered = RT_FALSE;
@@ -340,11 +344,15 @@ static void infer_thread_entry(void *param)
                         {
                             LOG_I("*** COUGH DETECTED! score=%.2f ***",
                                   scores[COUGH_INFER_IDX_COUGH]);
-                            cough_ui_push_cough_event();
-                            cough_stat_record_event(scores[COUGH_INFER_IDX_COUGH]);
 
-                            /* Flash LED on cough detection */
-                            common_led_set_mode(LED_MODE_BLINK_ONCE);
+                            /* Start or extend snippet capture */
+                            cough_record_begin_snippet(
+                                s_ring_buf, RING_BUF_SAMPLES,
+                                s_ring_wr, CD_SNIPPET_PRE_SAMPLES,
+                                RT_NULL, RT_NULL);
+
+                            /* Notify control thread */
+                            cough_detect_send_event(CD_EVENT_COUGH);
                         }
                     }
                     else
@@ -364,16 +372,6 @@ static void infer_thread_entry(void *param)
             energy_triggered = RT_FALSE;
         }
     }
-}
-
-/* ─────────────────────────────────────────────────────────────────── */
-/*  Recording done callback                                            */
-/* ─────────────────────────────────────────────────────────────────── */
-static void record_done_callback(const char *wav_path, void *user_data)
-{
-    RT_UNUSED(user_data);
-    LOG_I("Recording chunk completed: %s", wav_path);
-    rt_event_send(s_event, CD_EVENT_CHUNK_DONE);
 }
 
 /* ─────────────────────────────────────────────────────────────────── */
@@ -399,58 +397,46 @@ static void control_thread_entry(void *param)
     {
         /* Wait for any event, no timeout */
         rt_event_recv(s_event,
-                      CD_EVENT_KEY_DOWN | CD_EVENT_KEY_UP |
-                      CD_EVENT_TRIGGERED | CD_EVENT_CHUNK_DONE |
+                      CD_EVENT_CALIBRATE |
+                      CD_EVENT_COUGH | CD_EVENT_SNIPPET_DONE |
                       CD_EVENT_UPLOAD_TICK | CD_EVENT_REMIND_FIRE |
-                      CD_EVENT_STAT_FLUSH,
+                      CD_EVENT_STAT_FLUSH | CD_EVENT_UI_REFRESH,
                       RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
                       RT_WAITING_FOREVER,
                       &recv);
 
-        /* ── Key pressed: start calibration ──────────────────────── */
-        if (recv & CD_EVENT_KEY_DOWN)
+        /* ── Calibrate request (boot or Settings page) ────────────── */
+        if (recv & CD_EVENT_CALIBRATE)
         {
-            LOG_I("[STATE] → CALIBRATE  (hold button to measure ambient noise)");
+            LOG_I("[STATE] → CALIBRATE  (sampling ambient noise for ~%d s)",
+                  CD_CALIB_FRAMES * CD_FRAME_SAMPLES / CD_SAMPLE_RATE);
             s_state = CD_STATE_CALIBRATE;
             cough_ui_set_state_text("CALIBRATE");
         }
 
-        /* ── Key released: begin listening ───────────────────────── */
-        if (recv & CD_EVENT_KEY_UP)
+        /* ── Cough detected → update stats/UI/LED (stay in LISTENING) */
+        if (recv & CD_EVENT_COUGH)
         {
-            if (s_baseline <= 0.0f)
+            cough_ui_push_cough_event();
+            cough_stat_record_event(0.0f);
+            common_led_set_mode(LED_MODE_BLINK_ONCE);
+            common_storage_log_event("COUGH detected");
+        }
+
+        /* ── Snippet capture complete → flush to SD card ─────────── */
+        if (recv & CD_EVENT_SNIPPET_DONE)
+        {
+            int ret = cough_record_flush_to_sd();
+            if (ret == RT_EOK)
             {
-                LOG_W("No valid baseline yet. Press and hold the button longer.");
-                s_state = CD_STATE_IDLE;
-                cough_ui_set_state_text("IDLE");
+                const char *path = cough_record_get_last_path();
+                common_storage_log_event("Snippet saved: %s",
+                                         path ? path : "?");
+                LOG_I("Snippet flushed to SD card");
             }
             else
             {
-                LOG_I("[STATE] → LISTENING  (baseline=%.1f, threshold=%.1f)",
-                      s_baseline, s_baseline * CD_SNR_FACTOR);
-                s_state = CD_STATE_LISTENING;
-                cough_ui_set_state_text("LISTEN");
-            }
-        }
-
-        /* ── Sound detected → start recording ────────────────────── */
-        if (recv & CD_EVENT_TRIGGERED)
-        {
-            if (s_state == CD_STATE_LISTENING)
-            {
-                LOG_I("[STATE] → RECORDING  (5-minute chunk started)");
-                s_state = CD_STATE_RECORDING;
-                cough_ui_set_state_text("RECORD");
-                common_led_set_mode(LED_MODE_BLINK_SLOW);
-
-                /* Start WAV recording to SD card */
-                if (cough_record_start(record_done_callback, RT_NULL) != RT_EOK)
-                {
-                    LOG_W("Recording start failed, returning to LISTENING");
-                    s_state = CD_STATE_LISTENING;
-                    cough_ui_set_state_text("LISTEN");
-                    common_led_set_mode(LED_MODE_ON);
-                }
+                LOG_W("Snippet flush failed: %d", ret);
             }
         }
 
@@ -479,32 +465,29 @@ static void control_thread_entry(void *param)
             cough_stat_flush_to_storage();
         }
 
-        /* ── Chunk complete → upload then resume listening ────────── */
-        if (recv & CD_EVENT_CHUNK_DONE)
+        /* ── Periodic UI refresh (from timer) ─────────────────────── */
+        if (recv & CD_EVENT_UI_REFRESH)
         {
-            LOG_I("[STATE] → UPLOADING  (sending stats to server)");
-            s_state = CD_STATE_UPLOADING;
-            cough_ui_set_state_text("UPLOAD");
+            /* Perform deferred env sensor read (I2C + mdelay) here,
+             * NOT in the timer thread where stack is limited. */
+            common_env_poll();
 
-            /* Upload stats JSON */
-            if (common_network_is_ready())
+            const common_env_sample_t *env = common_env_get_cached();
+            if (env && env->valid)
             {
-                char json_buf[512];
-                cough_stat_to_json(json_buf, sizeof(json_buf));
-                common_network_upload_json("/api/cough/stats", json_buf);
-            }
-            else
-            {
-                /* Cache stats to SD card for later upload */
-                cough_stat_flush_to_storage();
-                LOG_I("Network offline, stats cached to SD card");
+                cough_ui_update_env(env->temperature_c, env->humidity_pct);
             }
 
-            /* Resume listening */
-            LOG_I("[STATE] → LISTENING  (chunk processed, resuming)");
-            s_state = CD_STATE_LISTENING;
-            cough_ui_set_state_text("LISTEN");
-            common_led_set_mode(LED_MODE_ON);
+            const cough_stat_daily_t *stats = cough_stat_get_daily();
+            if (stats)
+            {
+                cough_ui_update_stats(stats->total_today, stats->day_count,
+                                      stats->night_count, stats->burst_count);
+            }
+
+            /* Rotate old log files once per UI refresh (~1 s) is fine
+             * — the function is cheap when nothing needs deleting. */
+            common_storage_log_rotate();
         }
     }
 }
@@ -550,7 +533,11 @@ int cough_detect_init(void)
     rt_pin_irq_enable(CD_BUTTON_PIN, PIN_IRQ_ENABLE);
     LOG_I("Button pin configured (GET_PIN(8,3))");
 
-    cough_ui_set_state_text("IDLE");
+    /* Auto-calibrate: enter calibration state immediately on boot */
+    s_state = CD_STATE_CALIBRATE;
+    cough_ui_set_state_text("CALIBRATE");
+    LOG_I("Auto-calibrating ambient noise for ~%d s ...",
+          CD_CALIB_FRAMES * CD_FRAME_SAMPLES / CD_SAMPLE_RATE);
 
     /* 4. Initialise the TFLite Micro inference engine */
     if (cough_infer_init() != 0)
@@ -590,11 +577,11 @@ int cough_detect_init(void)
     rt_thread_startup(t);
 
     t = rt_thread_create("cd_ctl", control_thread_entry, RT_NULL,
-                         1024 * 2, 10, 10);
+                         1024 * 4, 10, 10);
     RT_ASSERT(t != RT_NULL);
     rt_thread_startup(t);
 
-    LOG_I("cough_detect_init complete. Press & hold button to calibrate.");
+    LOG_I("cough_detect_init complete. Auto-calibration in progress ...");
     return 0;
 }
 

@@ -121,6 +121,15 @@ void lv_port_indev_init(void)
     lv_indev_t *indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, touchpad_read);
+
+    /* Increase touch polling rate for better responsiveness.
+     * Default is LV_DEF_REFR_PERIOD (18ms ≈ 55Hz).
+     * 8ms ≈ 125Hz is a good balance for capacitive touch. */
+    lv_timer_t *indev_timer = lv_indev_get_read_timer(indev);
+    if (indev_timer)
+    {
+        lv_timer_set_period(indev_timer, 8);
+    }
 }
 
 

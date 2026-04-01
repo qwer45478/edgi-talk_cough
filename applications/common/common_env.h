@@ -20,4 +20,9 @@ int common_env_stop_periodic(void);
 /* Get the last cached sample (non-blocking) */
 const common_env_sample_t *common_env_get_cached(void);
 
+/* Poll for deferred sensor read; call from a thread with adequate stack.
+ * If the periodic timer has signalled a pending read, this performs
+ * the actual I2C transaction and updates the cache. */
+void common_env_poll(void);
+
 #endif

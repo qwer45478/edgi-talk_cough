@@ -11,7 +11,7 @@
  * AHT20 register-level I2C driver.
  * Compatible with AHT10/AHT20 sensors on I2C1 bus.
  */
-#define AHT20_I2C_BUS_NAME     "i2c1"
+#define AHT20_I2C_BUS_NAME     "i2c2"
 #define AHT20_I2C_ADDR         0x38
 
 /* AHT20 commands */
@@ -27,6 +27,8 @@ static struct rt_i2c_bus_device *s_i2c_bus = RT_NULL;
 static common_env_sample_t s_cached_sample;
 static rt_timer_t s_periodic_timer = RT_NULL;
 static rt_bool_t s_initialized = RT_FALSE;
+static volatile rt_bool_t s_read_pending = RT_FALSE;
+static rt_bool_t s_bus_found = RT_FALSE;  /* bus located but sensor not yet probed */
 
 static rt_err_t aht20_write_cmd(rt_uint8_t cmd, rt_uint8_t p1, rt_uint8_t p2)
 {
@@ -64,43 +66,85 @@ static rt_err_t aht20_read_raw(rt_uint8_t *buf, rt_size_t len)
 static void env_periodic_callback(void *parameter)
 {
     RT_UNUSED(parameter);
-    common_env_read(&s_cached_sample);
+    /* NOTE: Do NOT call common_env_read() here!
+     * This callback runs in the timer thread whose stack is small.
+     * common_env_read() does I2C + rt_thread_mdelay(80) + float math,
+     * which will overflow the timer stack and block all other soft timers.
+     * Instead, just set a flag; the actual read is done by the caller's
+     * periodic refresh mechanism (ui_refresh_callback -> control thread). */
+    s_read_pending = RT_TRUE;
+}
+
+/**
+ * Probe and calibrate the AHT20 sensor.
+ * Can be called multiple times; once it succeeds, s_initialized stays RT_TRUE.
+ */
+static rt_err_t aht20_probe(void)
+{
+    rt_uint8_t status;
+
+    if (s_initialized)
+        return RT_EOK;
+
+    if (s_i2c_bus == RT_NULL)
+        return -RT_ENOSYS;
+
+    /* AHT20 needs >= 40ms after power-on before it accepts commands.
+     * When called at boot, the system has usually been up long enough,
+     * but add a small safety margin. */
+    rt_thread_mdelay(50);
+
+    /* Read status byte — this doubles as a presence check */
+    if (aht20_read_raw(&status, 1) != RT_EOK)
+    {
+        LOG_D("AHT20 probe: no ACK on status read");
+        return -RT_EIO;
+    }
+
+    /* If not calibrated, send initialization (calibration) command */
+    if (!(status & AHT20_STATUS_CAL))
+    {
+        LOG_D("AHT20 not calibrated (status=0x%02X), sending init cmd", status);
+        if (aht20_write_cmd(AHT20_CMD_INIT, 0x08, 0x00) != RT_EOK)
+        {
+            return -RT_EIO;
+        }
+        rt_thread_mdelay(10);
+
+        /* Re-read status to verify calibration bit is set */
+        if (aht20_read_raw(&status, 1) != RT_EOK)
+        {
+            return -RT_EIO;
+        }
+        if (!(status & AHT20_STATUS_CAL))
+        {
+            LOG_W("AHT20 calibration failed (status=0x%02X)", status);
+            return -RT_ERROR;
+        }
+    }
+
+    s_initialized = RT_TRUE;
+    rt_memset(&s_cached_sample, 0, sizeof(s_cached_sample));
+    LOG_I("AHT20 environment sensor ready on %s", AHT20_I2C_BUS_NAME);
+    return RT_EOK;
 }
 
 int common_env_init(void)
 {
-    rt_uint8_t status;
-
     s_i2c_bus = (struct rt_i2c_bus_device *)rt_device_find(AHT20_I2C_BUS_NAME);
     if (s_i2c_bus == RT_NULL)
     {
         LOG_W("I2C bus '%s' not found, env sensor disabled", AHT20_I2C_BUS_NAME);
         return RT_EOK;
     }
+    s_bus_found = RT_TRUE;
 
-    /* Soft reset */
-    rt_uint8_t reset_cmd = AHT20_CMD_SOFT_RESET;
-    struct rt_i2c_msg msg = { AHT20_I2C_ADDR, RT_I2C_WR, 1, &reset_cmd };
-    rt_i2c_transfer(s_i2c_bus, &msg, 1);
-    rt_thread_mdelay(20);
-
-    /* Read status to check calibration */
-    if (aht20_read_raw(&status, 1) != RT_EOK)
+    /* Try to probe sensor now; if it fails, poll() will retry later */
+    if (aht20_probe() != RT_EOK)
     {
-        LOG_W("AHT20 status read failed, sensor may be absent");
-        return RT_EOK;
+        LOG_W("AHT20 not ready at boot, will retry on first periodic read");
     }
 
-    /* If not calibrated, send init command */
-    if (!(status & AHT20_STATUS_CAL))
-    {
-        aht20_write_cmd(AHT20_CMD_INIT, 0x08, 0x00);
-        rt_thread_mdelay(10);
-    }
-
-    s_initialized = RT_TRUE;
-    rt_memset(&s_cached_sample, 0, sizeof(s_cached_sample));
-    LOG_I("AHT20 environment sensor ready on %s", AHT20_I2C_BUS_NAME);
     return RT_EOK;
 }
 
@@ -182,7 +226,11 @@ int common_env_start_periodic(rt_uint32_t interval_ms)
         return -RT_ENOMEM;
     }
 
-    /* Do first read immediately */
+    /* Do first read immediately (retry probe if needed) */
+    if (s_bus_found && !s_initialized)
+    {
+        aht20_probe();
+    }
     common_env_read(&s_cached_sample);
     return rt_timer_start(s_periodic_timer);
 }
@@ -201,4 +249,20 @@ int common_env_stop_periodic(void)
 const common_env_sample_t *common_env_get_cached(void)
 {
     return &s_cached_sample;
+}
+
+void common_env_poll(void)
+{
+    if (s_read_pending)
+    {
+        s_read_pending = RT_FALSE;
+
+        /* Deferred probe: if bus is found but sensor wasn't ready at boot */
+        if (s_bus_found && !s_initialized)
+        {
+            aht20_probe();
+        }
+
+        common_env_read(&s_cached_sample);
+    }
 }

@@ -1,6 +1,8 @@
 #include "common_storage.h"
 
 #include <string.h>
+#include <stdarg.h>
+#include <time.h>
 
 #define DBG_TAG "common.fs"
 #define DBG_LVL DBG_INFO
@@ -11,6 +13,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
+#include <dirent.h>
 #endif
 
 /* WAV file header (44 bytes) */
@@ -337,5 +341,152 @@ int common_storage_wav_finalize(const char *path)
 #else
     RT_UNUSED(path);
     return -RT_ENOSYS;
+#endif
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
+/*  Storage space management — FIFO eviction of oldest audio files     */
+/* ─────────────────────────────────────────────────────────────────── */
+void common_storage_ensure_space(uint32_t need_bytes)
+{
+#ifdef RT_USING_DFS
+    struct statfs sfs;
+    char oldest[80];
+    DIR *dir;
+    struct dirent *entry;
+
+    while (1)
+    {
+        if (statfs(COMMON_STORAGE_BASE_PATH, &sfs) != 0)
+            break;
+
+        uint32_t free_bytes = (uint32_t)sfs.f_bfree * (uint32_t)sfs.f_bsize;
+        if (free_bytes >= need_bytes + COMMON_STORAGE_MIN_FREE)
+            break;   /* enough space */
+
+        /* Find the oldest file in cough_audio/ (lexicographic = chronological) */
+        dir = opendir(COMMON_STORAGE_AUDIO_DIR);
+        if (dir == RT_NULL)
+            break;
+
+        oldest[0] = '\0';
+        while ((entry = readdir(dir)) != RT_NULL)
+        {
+            if (entry->d_type != DT_REG)
+                continue;
+            if (oldest[0] == '\0' || rt_strcmp(entry->d_name, oldest + rt_strlen(COMMON_STORAGE_AUDIO_DIR) + 1) < 0)
+            {
+                rt_snprintf(oldest, sizeof(oldest), "%s/%s",
+                            COMMON_STORAGE_AUDIO_DIR, entry->d_name);
+            }
+        }
+        closedir(dir);
+
+        if (oldest[0] == '\0')
+        {
+            LOG_W("No audio files to evict, cannot free space");
+            break;
+        }
+
+        LOG_I("Evicting oldest audio file: %s", oldest);
+        unlink(oldest);
+    }
+#else
+    RT_UNUSED(need_bytes);
+#endif
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
+/*  Event logging — daily timestamped log files                        */
+/* ─────────────────────────────────────────────────────────────────── */
+void common_storage_log_event(const char *fmt, ...)
+{
+#ifdef RT_USING_DFS
+    char path[64];
+    char line[200];
+    int pos;
+    va_list ap;
+    time_t now;
+    struct tm *t;
+
+    if (!s_mounted)
+        return;
+
+    now = time(RT_NULL);
+    t = localtime(&now);
+    if (t == RT_NULL)
+        return;
+
+    /* File path: /sdcard/cough_log/event_YYYYMMDD.txt */
+    rt_snprintf(path, sizeof(path), "%s/event_%04d%02d%02d.txt",
+                COMMON_STORAGE_LOG_DIR,
+                t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+
+    /* Timestamp prefix */
+    pos = rt_snprintf(line, sizeof(line), "[%02d:%02d:%02d] ",
+                      t->tm_hour, t->tm_min, t->tm_sec);
+
+    /* User message */
+    va_start(ap, fmt);
+    pos += rt_vsnprintf(line + pos, sizeof(line) - pos, fmt, ap);
+    va_end(ap);
+
+    /* Ensure newline */
+    if (pos > 0 && pos < (int)(sizeof(line) - 1) && line[pos - 1] != '\n')
+    {
+        line[pos++] = '\n';
+        line[pos] = '\0';
+    }
+
+    common_storage_append_text(path, line);
+#else
+    RT_UNUSED(fmt);
+#endif
+}
+
+void common_storage_log_rotate(void)
+{
+#ifdef RT_USING_DFS
+    DIR *dir;
+    struct dirent *entry;
+    char path[80];
+    char cutoff_name[24];
+    time_t now;
+    struct tm *t;
+    time_t cutoff_time;
+
+    if (!s_mounted)
+        return;
+
+    now = time(RT_NULL);
+    cutoff_time = now - (COMMON_STORAGE_LOG_MAX_DAYS * 24 * 3600);
+    t = localtime(&cutoff_time);
+    if (t == RT_NULL)
+        return;
+
+    rt_snprintf(cutoff_name, sizeof(cutoff_name), "event_%04d%02d%02d.txt",
+                t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+
+    dir = opendir(COMMON_STORAGE_LOG_DIR);
+    if (dir == RT_NULL)
+        return;
+
+    while ((entry = readdir(dir)) != RT_NULL)
+    {
+        if (entry->d_type != DT_REG)
+            continue;
+        /* Only process event_*.txt files */
+        if (rt_strncmp(entry->d_name, "event_", 6) != 0)
+            continue;
+        /* Delete if filename sorts before the cutoff (older) */
+        if (rt_strcmp(entry->d_name, cutoff_name) < 0)
+        {
+            rt_snprintf(path, sizeof(path), "%s/%s",
+                        COMMON_STORAGE_LOG_DIR, entry->d_name);
+            LOG_I("Rotating old log: %s", path);
+            unlink(path);
+        }
+    }
+    closedir(dir);
 #endif
 }

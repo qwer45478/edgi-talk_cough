@@ -15,15 +15,14 @@
 #include "common/app_common.h"
 #include "common/common_env.h"
 #include "common/common_storage.h"
-#include "cough_detect/cough_stat.h"
+#include "cough_detect/cough_detect.h"
 #include "cough_ui/cough_ui.h"
 
 #define DBG_TAG    "main"
 #define DBG_LVL    DBG_INFO
 #include <rtdbg.h>
 
-/* Cough detection module */
-extern int cough_detect_init(void);
+/* Cough detection module — header included above */
 
 #define UI_INIT_TIMEOUT_MS  5000
 #define ENV_SAMPLE_INTERVAL_MS  30000   /* read AHT20 every 30s */
@@ -35,21 +34,9 @@ static struct rt_timer s_ui_refresh_timer;
 static void ui_refresh_callback(void *param)
 {
     (void)param;
-
-    /* Push environment data to UI */
-    const common_env_sample_t *env = common_env_get_cached();
-    if (env && env->valid)
-    {
-        cough_ui_update_env(env->temperature_c, env->humidity_pct);
-    }
-
-    /* Push statistics to UI */
-    const cough_stat_daily_t *stats = cough_stat_get_daily();
-    if (stats)
-    {
-        cough_ui_update_stats(stats->total_today, stats->day_count,
-                              stats->night_count, stats->burst_count);
-    }
+    /* Only send event — actual work (env I2C read, snprintf, mq send)
+     * runs in the control thread to avoid timer stack overflow. */
+    cough_detect_send_event(CD_EVENT_UI_REFRESH);
 }
 
 /*****************************************************************************
