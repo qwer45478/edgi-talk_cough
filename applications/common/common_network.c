@@ -20,6 +20,10 @@
 #include <webclient.h>
 #endif
 
+#ifdef PKG_NETUTILS_NTP
+#include <ntp.h>
+#endif
+
 static common_network_t s_network;
 
 #ifdef RT_USING_WIFI
@@ -31,6 +35,10 @@ static void wifi_ready_handler(int event, struct rt_wlan_buff *buff, void *param
     s_network.state = NETWORK_STATE_CONNECTED;
     s_network.is_ready = RT_TRUE;
     LOG_I("WiFi connected, network ready");
+
+    /* Trigger NTP sync via control thread event (can't block in event handler) */
+    extern void cough_detect_send_event(rt_uint32_t event_set);
+    cough_detect_send_event(1 << 8);  /* CD_EVENT_NTP_SYNC */
 }
 
 static void wifi_disconnect_handler(int event, struct rt_wlan_buff *buff, void *parameter)
@@ -230,6 +238,40 @@ int common_network_upload_file(const char *path, const char *file_path)
 const common_network_t *common_network_get(void)
 {
     return &s_network;
+}
+
+/* ── NTP time sync ────────────────────────────────────────────────── */
+static rt_bool_t s_ntp_synced = RT_FALSE;
+
+int common_network_ntp_sync(void)
+{
+#ifdef PKG_NETUTILS_NTP
+    if (!s_network.is_ready)
+    {
+        LOG_W("NTP: network not ready");
+        return -RT_EBUSY;
+    }
+
+    LOG_I("NTP: syncing time...");
+    time_t now = ntp_sync_to_rtc(RT_NULL);   /* uses servers from rtconfig.h */
+    if (now > 0)
+    {
+        s_ntp_synced = RT_TRUE;
+        struct tm *t = localtime(&now);
+        LOG_I("NTP: time synced — %04d-%02d-%02d %02d:%02d:%02d",
+              t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+              t->tm_hour, t->tm_min, t->tm_sec);
+        return RT_EOK;
+    }
+    else
+    {
+        LOG_W("NTP: sync failed");
+        return -RT_ERROR;
+    }
+#else
+    LOG_W("NTP: not compiled in (PKG_NETUTILS_NTP not defined)");
+    return -RT_ENOSYS;
+#endif
 }
 
 /* ── MSH command: http_test ──────────────────────────────────── */

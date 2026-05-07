@@ -13,6 +13,7 @@
 #include "../cough_detect/cough_detect.h"
 #include "../common/common_network.h"
 #include "../common/common_display.h"
+#include "../common/common_config.h"
 
 /* ── Widgets ────────────────────────────────────────────────────── */
 static lv_obj_t *s_label_wifi_status = RT_NULL;
@@ -33,7 +34,10 @@ static void threshold_slider_cb(lv_event_t *e)
     {
         lv_label_set_text_fmt(s_label_threshold, "0.%02d", val);
     }
-    /* Actual threshold update could be wired via a config API */
+    /* Apply threshold and persist to NOR Flash */
+    float thr = val / 100.0f;
+    cough_detect_set_threshold(thr);
+    common_config_set_float(CFG_KEY_THRESHOLD, thr);
 }
 
 static void brightness_slider_cb(lv_event_t *e)
@@ -45,6 +49,7 @@ static void brightness_slider_cb(lv_event_t *e)
         lv_label_set_text_fmt(s_label_brightness, "%d%%", val);
     }
     common_display_set_brightness((rt_uint8_t)val);
+    common_config_set_int(CFG_KEY_BRIGHTNESS, val);
 }
 
 static void recalibrate_btn_cb(lv_event_t *e)

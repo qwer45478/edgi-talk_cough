@@ -29,7 +29,7 @@ static cy_stc_smif_context_t smif_context;
 #define SMIF_BASE_ADDRESS      0x60000000
 #define FLASH_START_ADDRESS    0x60E00000
 #define FLASH_SIZE             (2 * 1024 * 1024) /* 2MB */
-#define FLASH_SECTOR_SIZE      4096 /* 4KB sectors */
+#define FLASH_SECTOR_SIZE      (64 * 1024) /* last 2MB lies in the 64KB erase region */
 #define FLASH_END_ADDRESS      (FLASH_START_ADDRESS + FLASH_SIZE)
 
 static int init(void);

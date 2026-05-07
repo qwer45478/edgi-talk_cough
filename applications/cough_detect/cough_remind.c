@@ -18,6 +18,7 @@
 
 #include "../common/common_audio_playback.h"
 #include "../common/common_led.h"
+#include "../common/common_config.h"
 
 static cough_remind_slot_t s_slots[COUGH_REMIND_MAX_SLOTS];
 static cough_remind_callback_t s_callback = RT_NULL;
@@ -135,6 +136,9 @@ int cough_remind_set(int index, rt_uint8_t hour, rt_uint8_t minute, const char *
         rt_strncpy(s_slots[index].label, label, sizeof(s_slots[index].label) - 1);
     }
 
+    /* Persist to NOR Flash */
+    common_config_save_remind(index);
+
     return RT_EOK;
 }
 
@@ -146,6 +150,10 @@ int cough_remind_enable(int index, rt_bool_t enabled)
     }
 
     s_slots[index].enabled = enabled;
+
+    /* Persist to NOR Flash */
+    common_config_save_remind(index);
+
     return RT_EOK;
 }
 

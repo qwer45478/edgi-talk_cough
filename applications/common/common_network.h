@@ -40,4 +40,11 @@ int common_network_upload_file(const char *path, const char *file_path);
 
 const common_network_t *common_network_get(void);
 
+/**
+ * Synchronize system time via NTP.
+ * Blocking call — must be called from a thread context (not timer/ISR).
+ * Returns RT_EOK on success, negative on failure.
+ */
+int common_network_ntp_sync(void);
+
 #endif

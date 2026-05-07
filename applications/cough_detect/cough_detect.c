@@ -41,6 +41,8 @@
 
 /* Minimum cough confidence score to trigger an event – kept in detect.h */
 
+static volatile float s_cough_threshold = CD_COUGH_THRESHOLD;
+
 /* ─────────────────────────────────────────────────────────────────── */
 /*  Ring buffer: mic_thread writes, infer_thread reads                 */
 /* ─────────────────────────────────────────────────────────────────── */
@@ -340,7 +342,7 @@ static void infer_thread_entry(void *param)
                                    energy_triggered ? " *" : "");
 #endif
 
-                        if (scores[COUGH_INFER_IDX_COUGH] > CD_COUGH_THRESHOLD)
+                        if (scores[COUGH_INFER_IDX_COUGH] > s_cough_threshold)
                         {
                             LOG_I("*** COUGH DETECTED! score=%.2f ***",
                                   scores[COUGH_INFER_IDX_COUGH]);
@@ -400,7 +402,8 @@ static void control_thread_entry(void *param)
                       CD_EVENT_CALIBRATE |
                       CD_EVENT_COUGH | CD_EVENT_SNIPPET_DONE |
                       CD_EVENT_UPLOAD_TICK | CD_EVENT_REMIND_FIRE |
-                      CD_EVENT_STAT_FLUSH | CD_EVENT_UI_REFRESH,
+                      CD_EVENT_STAT_FLUSH | CD_EVENT_UI_REFRESH |
+                      CD_EVENT_NTP_SYNC,
                       RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
                       RT_WAITING_FOREVER,
                       &recv);
@@ -488,6 +491,12 @@ static void control_thread_entry(void *param)
             /* Rotate old log files once per UI refresh (~1 s) is fine
              * — the function is cheap when nothing needs deleting. */
             common_storage_log_rotate();
+        }
+
+        /* ── NTP time sync (from WiFi ready event) ────────────────── */
+        if (recv & CD_EVENT_NTP_SYNC)
+        {
+            common_network_ntp_sync();
         }
     }
 }
@@ -593,4 +602,19 @@ cd_state_t cough_detect_get_state(void)
 float cough_detect_get_baseline(void)
 {
     return s_baseline;
+}
+
+void cough_detect_set_threshold(float threshold)
+{
+    if (threshold >= 0.1f && threshold <= 0.95f)
+    {
+        s_cough_threshold = threshold;
+        LOG_I("Cough threshold updated: %d.%02d",
+              (int)threshold, (int)((threshold - (int)threshold) * 100));
+    }
+}
+
+float cough_detect_get_threshold(void)
+{
+    return s_cough_threshold;
 }

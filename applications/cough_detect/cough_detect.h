@@ -58,6 +58,7 @@ extern "C" {
 #define CD_EVENT_REMIND_FIRE    (1 << 5)  /* reminder alert triggered  */
 #define CD_EVENT_STAT_FLUSH     (1 << 6)  /* midnight stats flush      */
 #define CD_EVENT_UI_REFRESH    (1 << 7)  /* periodic UI data refresh   */
+#define CD_EVENT_NTP_SYNC     (1 << 8)  /* NTP time sync after WiFi   */
 
 /* ── System state ────────────────────────────────────────────────── */
 typedef enum {
@@ -90,6 +91,17 @@ float cough_detect_get_baseline(void);
  * Send an event to the control thread (thread-safe, callable from timer/ISR).
  */
 void cough_detect_send_event(rt_uint32_t event_set);
+
+/**
+ * Dynamically update the cough confidence threshold (0.0–1.0).
+ * Usually called from common_config when loading persisted settings.
+ */
+void cough_detect_set_threshold(float threshold);
+
+/**
+ * Get the current cough confidence threshold.
+ */
+float cough_detect_get_threshold(void);
 
 #ifdef __cplusplus
 }

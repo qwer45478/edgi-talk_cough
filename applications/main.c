@@ -15,6 +15,7 @@
 #include "common/app_common.h"
 #include "common/common_env.h"
 #include "common/common_storage.h"
+#include "common/common_config.h"
 #include "cough_detect/cough_detect.h"
 #include "cough_ui/cough_ui.h"
 
@@ -49,6 +50,12 @@ int main(void)
     app_common_init(APP_COMMON_INIT_BASE);
     app_common_dump_status();
 
+    /* Initialize persistent config (FlashDB KVDB on NOR Flash) */
+    if (common_config_init() == RT_EOK)
+    {
+        LOG_I("Persistent config ready (device=%s)", common_config_get_device_id());
+    }
+
     /* Ensure storage directories exist */
     common_storage_ensure_dirs();
 
@@ -72,6 +79,11 @@ int main(void)
         LOG_E("Failed to initialize cough detection!");
         return -1;
     }
+
+    /* Load persisted settings from NOR Flash and apply to all subsystems
+     * (remind slots, threshold, WiFi credentials, brightness, etc.)
+     * Must be called AFTER cough_detect_init() which initializes remind/stat. */
+    common_config_load_all();
 
     /* Start periodic UI refresh (env + stats → display) */
     rt_timer_init(&s_ui_refresh_timer, "ui_rfsh",

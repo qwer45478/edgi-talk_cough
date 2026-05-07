@@ -111,6 +111,13 @@
 #define FAL_DEBUG 1
 #define FAL_PART_HAS_TABLE_CFG
 
+/* FlashDB: KV database on NOR Flash */
+#define PKG_USING_FLASHDB
+#define FDB_USING_KVDB
+#define FDB_USING_FAL_MODE
+#define FDB_KV_AUTO_UPDATE
+#define PKG_USING_FLASHDB_LATEST_VERSION
+
 /* Device Drivers */
 
 #define RT_USING_DEVICE_IPC
@@ -376,6 +383,11 @@
 /* end of CYW43439 WiFi */
 /* end of Wi-Fi */
 #define PKG_USING_NETUTILS
+#define PKG_NETUTILS_NTP
+#define NETUTILS_NTP_TIMEZONE 8
+#define NETUTILS_NTP_HOSTNAME "ntp.aliyun.com"
+#define NETUTILS_NTP_HOSTNAME2 "cn.ntp.org.cn"
+#define NETUTILS_NTP_HOSTNAME3 "pool.ntp.org"
 #define PKG_NETUTILS_IPERF
 #define IPERF_THREAD_STACK_SIZE 2048
 #define PKG_USING_NETUTILS_LATEST_VERSION

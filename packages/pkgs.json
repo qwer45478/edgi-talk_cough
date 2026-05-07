@@ -48,5 +48,10 @@
   "name": "OPTPARSE",
   "path": "/packages/misc/optparse",
   "ver": "latest"
+ },
+ {
+  "name": "FLASHDB",
+  "path": "/packages/system/FlashDB",
+  "ver": "latest"
  }
 ]
