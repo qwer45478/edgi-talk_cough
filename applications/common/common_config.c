@@ -1,7 +1,7 @@
 /*
- * common_config.c â€” Persistent configuration via FlashDB KVDB on NOR Flash
+ * common_config.c ¡ª Persistent configuration via FlashDB KVDB on NOR Flash
  *
- * FAL partition "config" (64 KB, 16 Ã— 4 KB sectors) is used by FlashDB
+ * FAL partition "config" (64 KB, 16 ¡Á 4 KB sectors) is used by FlashDB
  * to store key-value pairs with wear leveling and power-fail safety.
  */
 
@@ -22,11 +22,11 @@
 #define DBG_LVL    DBG_INFO
 #include <rtdbg.h>
 
-/* â”€â”€ FlashDB instance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ FlashDB instance ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 static struct fdb_kvdb s_kvdb;
 static rt_bool_t s_inited = RT_FALSE;
 
-/* Default KV table â€” FlashDB writes these on first boot (virgin flash) */
+/* Default KV table ¡ª FlashDB writes these on first boot (virgin flash) */
 static struct fdb_default_kv_node s_default_kv_table[] =
 {
     { CFG_KEY_THRESHOLD,  "0.35",  0 },
@@ -40,7 +40,7 @@ static struct fdb_default_kv_node s_default_kv_table[] =
 
 #define DEFAULT_KV_COUNT  (sizeof(s_default_kv_table) / sizeof(s_default_kv_table[0]))
 
-/* â”€â”€ Device ID generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Device ID generation ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 static char s_device_id[16];
 
 static void generate_device_id(void)
@@ -58,7 +58,7 @@ static void generate_device_id(void)
     s_device_id[12] = '\0';
 }
 
-/* â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Init ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 int common_config_init(void)
 {
     if (s_inited)
@@ -97,7 +97,7 @@ int common_config_init(void)
     return RT_EOK;
 }
 
-/* â”€â”€ Generic string get/set â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Generic string get/set ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 int common_config_get_str(const char *key, char *buf, int buf_size)
 {
     if (!s_inited || key == RT_NULL || buf == RT_NULL || buf_size <= 0)
@@ -121,7 +121,7 @@ int common_config_set_str(const char *key, const char *value)
     return (err == FDB_NO_ERR) ? RT_EOK : -RT_ERROR;
 }
 
-/* â”€â”€ Typed helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Typed helpers ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 int common_config_get_int(const char *key, int default_val)
 {
     char buf[16];
@@ -169,13 +169,13 @@ void common_config_set_float(const char *key, float value)
     common_config_set_str(key, buf);
 }
 
-/* â”€â”€ Device ID â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Device ID ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 const char *common_config_get_device_id(void)
 {
     return s_device_id;
 }
 
-/* â”€â”€ Load ALL persisted settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Load ALL persisted settings ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 void common_config_load_all(void)
 {
     if (!s_inited)
@@ -213,34 +213,38 @@ void common_config_load_all(void)
           (int)threshold, (int)((threshold - (int)threshold) * 100));
 
     /* --- Reminder slots --- */
-    for (int i = 0; i < COUGH_REMIND_MAX_SLOTS; i++)
-    {
-        char key[16];
-        rt_snprintf(key, sizeof(key), CFG_KEY_REMIND_FMT, i);
-        if (common_config_get_str(key, buf, sizeof(buf)) > 0 && buf[0] != '\0')
-        {
-            /* Parse "HH:MM,enabled,label" */
-            int hour = 0, minute = 0, enabled = 1;
-            char label[24] = {0};
-            /* sscanf-free parsing for robustness */
-            const char *p = buf;
-            hour = (p[0] - '0') * 10 + (p[1] - '0');
-            minute = (p[3] - '0') * 10 + (p[4] - '0');
-            p += 5;
-            if (*p == ',') p++;
-            enabled = (*p == '1') ? 1 : 0;
-            p++;
-            if (*p == ',') p++;
-            rt_strncpy(label, p, sizeof(label) - 1);
-
-            cough_remind_set(i, (rt_uint8_t)hour, (rt_uint8_t)minute, label);
-            cough_remind_enable(i, enabled ? RT_TRUE : RT_FALSE);
-        }
-    }
-    LOG_I("Reminder slots loaded from flash");
+    /* @yyc edit: ½ûÓÃ´Ó Flash ¼ÓÔØÌáÐÑÅäÖÃ£¬¸ÄÎªÊÖ¶¯ÆôÓÃ
+     * Ô­Òò£ºÉè±¸Í¨µçºó RTC ±£³ÖÉÏ´Î¶ÏµçÇ°µÄÊ±¼ä£¬Èç¹ûÇ¡ºÃ½Ó½üÄ³¸öÌáÐÑÊ±¼ä£¬
+     * »áµ¼ÖÂ¿ª»úºóÁ¢¼´²¥·ÅÌáÊ¾Òô¡£ÈçÐèÆôÓÃÌáÐÑ£¬ÇëÍ¨¹ýÔÆ¶Ë»ò UI ÊÖ¶¯ÅäÖÃ¡£
+     */
+    // for (int i = 0; i < COUGH_REMIND_MAX_SLOTS; i++)
+    // {
+    //     char key[16];
+    //     rt_snprintf(key, sizeof(key), CFG_KEY_REMIND_FMT, i);
+    //     if (common_config_get_str(key, buf, sizeof(buf)) > 0 && buf[0] != '\0')
+    //     {
+    //         /* Parse "HH:MM,enabled,label" */
+    //         int hour = 0, minute = 0, enabled = 1;
+    //         char label[24] = {0};
+    //         /* sscanf-free parsing for robustness */
+    //         const char *p = buf;
+    //         hour = (p[0] - '0') * 10 + (p[1] - '0');
+    //         minute = (p[3] - '0') * 10 + (p[4] - '0');
+    //         p += 5;
+    //         if (*p == ',') p++;
+    //         enabled = (*p == '1') ? 1 : 0;
+    //         p++;
+    //         if (*p == ',') p++;
+    //         rt_strncpy(label, p, sizeof(label) - 1);
+    //
+    //         cough_remind_set(i, (rt_uint8_t)hour, (rt_uint8_t)minute, label);
+    //         cough_remind_enable(i, enabled ? RT_TRUE : RT_FALSE);
+    //     }
+    // }
+    // LOG_I("Reminder slots loaded from flash");
 }
 
-/* â”€â”€ Save a single remind slot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Save a single remind slot ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 void common_config_save_remind(int index)
 {
     if (!s_inited || index < 0 || index >= COUGH_REMIND_MAX_SLOTS)
@@ -260,7 +264,7 @@ void common_config_save_remind(int index)
     common_config_set_str(key, val);
 }
 
-/* â”€â”€ MSH debug command â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ MSH debug command ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 static void cfg_dump(int argc, char **argv)
 {
     if (!s_inited)

@@ -95,10 +95,12 @@ int cough_remind_init(void)
 {
     rt_memset(s_slots, 0, sizeof(s_slots));
 
-    /* Set default reminders — can be reconfigured via cloud or MSH */
-    cough_remind_set(0, 8,  0,  "Morning Med");
-    cough_remind_set(1, 12, 0,  "Noon Med");
-    cough_remind_set(2, 20, 0,  "Evening Med");
+    /* @yyc edit: 禁用默认提醒设置，改为手动从云端或本地配置启用
+     * 如需启用默认提醒，请取消注释以下三行：
+     * cough_remind_set(0, 8,  0,  "Morning Med");
+     * cough_remind_set(1, 12, 0,  "Noon Med");
+     * cough_remind_set(2, 20, 0,  "Evening Med");
+     */
 
     /* Check every 30 seconds */
     s_check_timer = rt_timer_create("remind", remind_check_callback, RT_NULL,

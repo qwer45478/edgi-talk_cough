@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "common_power.h"
+#include "common_config.h"
 
 #define DBG_TAG "common.net"
 #define DBG_LVL DBG_INFO
@@ -228,7 +229,7 @@ int common_network_upload_json(const char *path, const char *json_payload)
 
 int common_network_upload_file(const char *path, const char *file_path)
 {
-    /* File upload via multipart form-data â€” left for cloud integration team */
+    /* File upload via multipart form-data ¡ª left for cloud integration team */
     RT_UNUSED(path);
     RT_UNUSED(file_path);
     LOG_W("File upload not yet implemented (cloud team integration point)");
@@ -240,7 +241,7 @@ const common_network_t *common_network_get(void)
     return &s_network;
 }
 
-/* â”€â”€ NTP time sync â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ NTP time sync ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 static rt_bool_t s_ntp_synced = RT_FALSE;
 
 int common_network_ntp_sync(void)
@@ -258,7 +259,7 @@ int common_network_ntp_sync(void)
     {
         s_ntp_synced = RT_TRUE;
         struct tm *t = localtime(&now);
-        LOG_I("NTP: time synced â€” %04d-%02d-%02d %02d:%02d:%02d",
+        LOG_I("NTP: time synced ¡ª %04d-%02d-%02d %02d:%02d:%02d",
               t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
               t->tm_hour, t->tm_min, t->tm_sec);
         return RT_EOK;
@@ -274,7 +275,7 @@ int common_network_ntp_sync(void)
 #endif
 }
 
-/* â”€â”€ MSH command: http_test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ MSH command: http_test ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 #ifdef PKG_USING_WEBCLIENT
 #include <webclient.h>
 static void http_test(int argc, char **argv)
@@ -347,3 +348,235 @@ static void http_test(int argc, char **argv)
 }
 MSH_CMD_EXPORT(http_test, HTTP GET/POST test command);
 #endif
+
+/* ©¤©¤ AP mode for WiFi configuration ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */  // @yyc edit: APÄ£Ê½WiFiÅäÍø¹¦ÄÜ
+static common_ap_state_t s_ap_state = AP_MODE_INACTIVE;
+static rt_thread_t s_ap_config_thread = RT_NULL;
+
+/* AP mode configuration */
+#define AP_MODE_SSID_PREFIX  "CoughDetect_"  /* @yyc edit: ÅäÍøÈÈµãSSIDÇ°×º */
+#define AP_MODE_PASSWORD     "12345678"      /* @yyc edit: ÅäÍøÈÈµãÃÜÂë */
+#define AP_MODE_IP           "192.168.169.1"
+#define AP_MODE_GATEWAY      "192.168.169.1"
+#define AP_MODE_NETMASK      "255.255.255.0"
+
+/* WiFi credentials received from web configuration */
+static char s_pending_ssid[32] = {0};
+static char s_pending_password[64] = {0};
+static rt_sem_t s_wifi_connect_sem = RT_NULL;
+
+static void ap_config_thread_entry(void *parameter)
+{
+    (void)parameter;
+
+    LOG_I("AP mode: starting web server on %s", AP_MODE_IP);
+
+    /* Start web server for configuration page */
+    extern int webserver_start(void);
+    webserver_start();
+
+    /* Wait for user to configure WiFi via web browser */
+    /* The web server will set s_pending_ssid and s_pending_password */
+    /* When credentials are received, web server signals via sem */
+
+    while (s_ap_state == AP_MODE_ACTIVE || s_ap_state == AP_MODE_CONNECTING)
+    {
+        rt_thread_mdelay(100);
+
+        /* Check if we have received WiFi credentials from web server */
+        if (s_pending_ssid[0] != '\0')
+        {
+            s_ap_state = AP_MODE_CONNECTING;
+
+            /* Stop AP mode */
+            LOG_I("AP mode: user configured WiFi, connecting to: %s", s_pending_ssid);
+            rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
+
+            /* Disconnect from AP first */
+            rt_wlan_disconnect();
+            rt_thread_mdelay(500);
+
+            /* Connect to user WiFi */
+            if (rt_wlan_connect(s_pending_ssid, s_pending_password) == RT_EOK)
+            {
+                LOG_I("AP mode: WiFi connection initiated");
+                /* Wait for connection */
+                rt_thread_mdelay(3000);
+
+                if (rt_wlan_is_ready())
+                {
+                    /* Save configuration to Flash */
+                    common_config_set_string(CFG_KEY_WIFI_SSID, s_pending_ssid);
+                    common_config_set_string(CFG_KEY_WIFI_PASS, s_pending_password);
+
+                    s_ap_state = AP_MODE_SUCCESS;
+                    LOG_I("AP mode: WiFi connected successfully!");
+                    common_network_ap_connect_success();
+                }
+                else
+                {
+                    s_ap_state = AP_MODE_FAILED;
+                    LOG_W("AP mode: WiFi connection failed");
+                    common_network_ap_connect_failed();
+                }
+            }
+            else
+            {
+                s_ap_state = AP_MODE_FAILED;
+                LOG_E("AP mode: failed to start WiFi connection");
+                common_network_ap_connect_failed();
+            }
+
+            /* Clear pending credentials */
+            memset(s_pending_ssid, 0, sizeof(s_pending_ssid));
+            memset(s_pending_password, 0, sizeof(s_pending_password));
+        }
+    }
+
+    LOG_I("AP mode: exiting");
+    s_ap_config_thread = RT_NULL;
+}
+
+int common_network_start_ap_mode(void)
+{
+    if (s_ap_state != AP_MODE_INACTIVE)
+    {
+        LOG_W("AP mode: already active");
+        return RT_EOK;
+    }
+
+    /* Create semaphore for WiFi connection signaling */
+    s_wifi_connect_sem = rt_sem_create("wifi_ap_sem", 0, RT_IPC_FLAG_FIFO);
+    if (s_wifi_connect_sem == RT_NULL)
+    {
+        LOG_E("AP mode: failed to create semaphore");
+        return -RT_ENOMEM;
+    }
+
+    /* Disconnect current WiFi if connected */
+    rt_wlan_disconnect();
+
+    /* Stop auto reconnect temporarily */
+    rt_wlan_config_autoreconnect(RT_FALSE);
+
+    /* Set AP mode */
+    if (rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_AP) != RT_EOK)
+    {
+        LOG_E("AP mode: failed to set AP mode");
+        rt_sem_delete(s_wifi_connect_sem);
+        return -RT_ERROR;
+    }
+
+    /* Start AP */
+    if (rt_wlan_start_ap(AP_MODE_SSID_PREFIX, AP_MODE_PASSWORD) != RT_EOK)
+    {
+        LOG_E("AP mode: failed to start AP");
+        rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
+        rt_sem_delete(s_wifi_connect_sem);
+        return -RT_ERROR;
+    }
+
+    s_ap_state = AP_MODE_ACTIVE;
+    LOG_I("AP mode: started - SSID: %s, Password: %s", AP_MODE_SSID_PREFIX, AP_MODE_PASSWORD);
+    LOG_I("AP mode: connect to http://%s in browser", AP_MODE_IP);
+
+    /* Start configuration thread */
+    s_ap_config_thread = rt_thread_create("ap_config",
+                                           ap_config_thread_entry,
+                                           RT_NULL,
+                                           4096,
+                                           15,
+                                           10);
+    if (s_ap_config_thread != RT_NULL)
+    {
+        rt_thread_startup(s_ap_config_thread);
+    }
+    else
+    {
+        LOG_E("AP mode: failed to create config thread");
+        rt_wlan_stop_ap();
+        rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
+        rt_sem_delete(s_wifi_connect_sem);
+        s_ap_state = AP_MODE_INACTIVE;
+        return -RT_ENOMEM;
+    }
+
+    return RT_EOK;
+}
+
+int common_network_stop_ap_mode(void)
+{
+    if (s_ap_state == AP_MODE_INACTIVE)
+    {
+        return RT_EOK;
+    }
+
+    LOG_I("AP mode: stopping...");
+
+    /* Stop configuration thread */
+    s_ap_state = AP_MODE_INACTIVE;
+
+    /* Stop web server first */
+    extern int webserver_stop(void);
+    webserver_stop();
+
+    if (s_ap_config_thread != RT_NULL)
+    {
+        rt_thread_mdelay(500);  /* Wait for thread to finish */
+    }
+
+    /* Stop AP */
+    rt_wlan_stop_ap();
+
+    /* Switch back to STA mode */
+    rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
+
+    /* Re-enable auto reconnect */
+    rt_wlan_config_autoreconnect(RT_TRUE);
+
+    /* Delete semaphore */
+    if (s_wifi_connect_sem != RT_NULL)
+    {
+        rt_sem_delete(s_wifi_connect_sem);
+        s_wifi_connect_sem = RT_NULL;
+    }
+
+    /* Clear pending credentials */
+    memset(s_pending_ssid, 0, sizeof(s_pending_ssid));
+    memset(s_pending_password, 0, sizeof(s_pending_password));
+
+    LOG_I("AP mode: stopped, switched to STA mode");
+
+    return RT_EOK;
+}
+
+common_ap_state_t common_network_get_ap_state(void)
+{
+    return s_ap_state;
+}
+
+void common_network_ap_connect_success(void)
+{
+    LOG_I("AP mode: WiFi configuration completed successfully");
+    /* Notify UI to update status */
+    extern void page_settings_update_network(void);
+    page_settings_update_network();
+}
+
+void common_network_ap_connect_failed(void)
+{
+    LOG_W("AP mode: WiFi configuration failed");
+}
+
+/* Called from web server CGI to set pending WiFi credentials */
+void common_network_set_pending_wifi(const char *ssid, const char *password)
+{
+    if (ssid != RT_NULL && password != RT_NULL)
+    {
+        rt_strncpy(s_pending_ssid, ssid, sizeof(s_pending_ssid) - 1);
+        rt_strncpy(s_pending_password, password, sizeof(s_pending_password) - 1);
+        s_pending_ssid[sizeof(s_pending_ssid) - 1] = '\0';
+        s_pending_password[sizeof(s_pending_password) - 1] = '\0';
+        LOG_I("AP mode: received WiFi credentials from web");
+    }
+}

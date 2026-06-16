@@ -59,6 +59,14 @@ static void recalibrate_btn_cb(lv_event_t *e)
     cough_detect_send_event(CD_EVENT_CALIBRATE);
 }
 
+static void config_wifi_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    /* Start AP mode for WiFi configuration */
+    extern int common_network_start_ap_mode(void);
+    common_network_start_ap_mode();
+}
+
 /* ================================================================
  *  page_settings_create
  * ================================================================ */
@@ -74,7 +82,7 @@ void page_settings_create(lv_obj_t *parent)
     lv_obj_set_scroll_dir(parent, LV_DIR_VER);
 
     /* ─── WiFi card ────────────────────────────────────────────── */
-    lv_obj_t *wifi_card = ui_create_card(parent, CONTENT_W - 8, 100);
+    lv_obj_t *wifi_card = ui_create_card(parent, CONTENT_W - 8, 140);  // @yyc edit: 增加高度从100到140，添加配置WiFi按钮
 
     lv_obj_t *wifi_hdr = ui_create_section_label(wifi_card, LV_SYMBOL_WIFI " WiFi");
     lv_obj_align(wifi_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -90,6 +98,19 @@ void page_settings_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_label_wifi_ssid, lv_color_hex(CLR_TEXT_WHITE), LV_PART_MAIN);
     lv_obj_set_style_text_font(s_label_wifi_ssid, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_align(s_label_wifi_ssid, LV_ALIGN_TOP_LEFT, 0, 44);
+
+    /* Config WiFi button - starts AP mode for WiFi configuration */
+    lv_obj_t *btn_config_wifi = lv_button_create(wifi_card);  // @yyc edit: 添加配置WiFi按钮
+    lv_obj_set_size(btn_config_wifi, 140, 36);
+    lv_obj_align(btn_config_wifi, LV_ALIGN_TOP_LEFT, 0, 70);
+    lv_obj_set_style_bg_color(btn_config_wifi, lv_color_hex(CLR_ACCENT_GREEN), LV_PART_MAIN);
+    lv_obj_set_style_radius(btn_config_wifi, 8, LV_PART_MAIN);
+
+    lv_obj_t *config_wifi_lbl = lv_label_create(btn_config_wifi);
+    lv_label_set_text(config_wifi_lbl, LV_SYMBOL_SETTINGS " Config");
+    lv_obj_set_style_text_color(config_wifi_lbl, lv_color_hex(CLR_TEXT_WHITE), LV_PART_MAIN);
+    lv_obj_center(config_wifi_lbl);
+    lv_obj_add_event_cb(btn_config_wifi, config_wifi_btn_cb, LV_EVENT_CLICKED, RT_NULL);
 
     /* Update WiFi info */
     page_settings_update_network();
