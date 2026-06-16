@@ -1,29 +1,62 @@
-# XiaoZhi Sample Project
+# 儿童咳嗽检测项目 - 开发板代码
 
-**中文** | [**English**](./README.md)
+## 项目简介
 
-## Introduction
+本项目是基于 **Edgi-Talk 平台** 的儿童咳嗽检测设备开发板代码，运行在 **RT-Thread 实时操作系统** 上。该设备能够实时监测儿童的咳嗽情况，并将数据上传至云端进行分析和展示。
 
-This sample project is based on the **Edgi-Talk platform**, demonstrating the **basic functions of the XiaoZhi voice interaction device**, running on the **RT-Thread real-time operating system**.
-With this project, users can quickly verify the device’s **WiFi connection**, **button wake-up**, and **voice interaction** capabilities, providing a fundamental reference for further application development.
+## 功能特性
 
-## Software Description
+### 核心功能
 
-* The project is developed based on the **Edgi-Talk** platform.
-* The sample includes the following functions:
+- **咳嗽检测**：基于 Edge Impulse 机器学习模型实时检测咳嗽声音
+- **咳嗽统计**：记录咳嗽次数、频率等统计数据
+- **数据上传**：将咳嗽事件和统计数据上传至云端服务器
+- **状态显示**：通过 LCD 屏幕展示设备状态和检测结果
 
-  * WiFi connection and status display
-  * Button wake-up and voice interaction
-  * Device state management (standby, listening, sleep, etc.)
+### 系统功能
 
-## Usage
+- WiFi 连接与状态管理
+- 按钮唤醒与用户交互
+- 设备状态管理（待机、监听、睡眠等）
+- 环境数据采集（温度、湿度等）
 
-### Prepare Wi-Fi resources (first-time setup)
+## 项目结构
 
-The Wi-Fi host driver loads three blobs (firmware `.bin`, regulatory `.clm_blob`, and board-specific `nvram.txt`) from FAL before it can power up the radio. These files live outside the application image, so flashing a new binary will not refresh them automatically. The default bundles for Edgi-Talk live in the workspace root under `resources/`.
+```
+edgi-talk_cough/
+├── applications/          # 应用层代码
+│   ├── common/            # 通用模块（网络、显示、按键等）
+│   ├── cough_detect/      # 咳嗽检测模块
+│   ├── cough_ui/          # UI界面模块
+│   └── main.c             # 主入口文件
+├── board/                 # 开发板配置
+├── edge-impulse/          # Edge Impulse SDK（机器学习模型）
+├── libraries/             # 硬件驱动库
+│   ├── HAL_Drivers/       # 硬件抽象层驱动
+│   └── components/        # 组件库（LVGL、IPC等）
+├── packages/              # 第三方软件包
+│   ├── cJSON/             # JSON 解析库
+│   ├── mbedtls/           # TLS 加密库
+│   ├── opus/              # 音频编解码库
+│   └── ...
+└── figures/               # 文档图片资源
+```
 
-- Keep `WHD_RESOURCES_IN_EXTERNAL_STORAGE_FAL` enabled in menuconfig and make sure the FAL table provides the `whd_firmware`, `whd_clm`, and `whd_nvram` partitions (the defaults reserve 512 KB + 32 KB + 32 KB of on-chip flash).
-- Attach a serial terminal, reboot into the `msh` prompt, and run the download helper for each partition:
+## 快速开始
+
+### 1. 准备工作
+
+- **开发环境**：推荐使用 RT-Thread Studio
+- **硬件平台**：Edgi-Talk 开发板（基于 PSoC 6 系列）
+- **工具链**：ARM GCC
+
+### 2. WiFi 资源准备（首次使用）
+
+WiFi 驱动需要从 FAL 加载三个固件文件（`.bin`、`.clm_blob`、`nvram.txt`）。这些文件位于项目根目录的 `resources/` 文件夹中。
+
+- 在 menuconfig 中保持 `WHD_RESOURCES_IN_EXTERNAL_STORAGE_FAL` 选项启用
+- 确保 FAL 分区表包含 `whd_firmware`、`whd_clm` 和 `whd_nvram` 分区
+- 通过串口终端，在 `msh` 命令行执行以下命令上传资源：
 
 ```
 whd_res_download whd_firmware
@@ -31,113 +64,93 @@ whd_res_download whd_clm
 whd_res_download whd_nvram
 ```
 
-Each command switches to YMODEM mode. Use a terminal that supports YMODEM upload (Xshell) to send the matching files from the top-level `resources/` directory .
-- Wait for the `Download … success` message before moving to the next partition.
-- Power-cycle or reset the board after the three transfers so Wi-Fi starts with the freshly stored blobs. Re-run the command whenever you update the firmware/CLM/NVRAM bundle.
+每个命令会进入 YMODEM 模式，请使用支持 YMODEM 协议的终端（如 Xshell）发送对应的文件。
 
-![wifi](figures/wifi.gif)
+### 3. 首次配置（AP 模式）
 
-### 1. First-time setup (AP configuration)
+1. 开发板启动后进入 **AP 模式**
+2. 使用手机或电脑连接设备热点（密码显示在屏幕上）
+3. 打开浏览器访问 **192.168.169.1** 进入配置界面
+4. 点击 **Scan** 扫描附近的 WiFi 热点并选择连接
+5. 连接成功后屏幕显示 **"Standby"**，表示设备已就绪
 
-1. When the development board starts, it will enter **AP mode**.
-   Connect your phone or computer to the device hotspot (password shown on the screen):
+### 4. 设备交互
 
-   ![alt text](figures/4.png)
+- **按钮操作**：按下用户按键进入语音输入状态
+- **状态指示**：屏幕显示当前设备状态（待机、监听、睡眠等）
+- **咳嗽检测**：设备自动检测咳嗽并记录事件
 
-2. After a successful connection, open a browser and enter **192.168.169.1** to access the configuration interface:
+## 设备状态说明
 
-3. Click **Scan** to search for nearby Wi-Fi hotspots:
+### 1. 连接中（Connecting）
 
-   ![alt text](figures/6.png)
+设备正在连接 WiFi 网络，等待网络建立。
 
-4. After the WiFi connection is successful, the following page will be displayed:
+### 2. 待机状态（Standby）
 
-   ![alt text](figures/7.png)
+设备处于正常工作状态，持续监测咳嗽声音。
 
-5. When the device screen shows **“Standby”**, it means voice interaction is ready:
+### 3. 监听状态（Listening）
 
-   ![alt text](figures/8.png)
+按下按键后进入语音输入状态，正在处理音频数据。
 
-> **Tip:** Press the **first user button** on the development board to enter voice input. After waiting 1–2 seconds, XiaoZhi will automatically respond.
+### 4. 睡眠模式（Sleep）
 
-## XiaoZhi Expression Meaning
+低功耗模式，按下按钮可唤醒设备。
 
-### 1. Connecting (please wait)
-
-![alt text](figures/9.png)
-
-### 2. Monitoring (press the button to start talking)
-
-![alt text](figures/10.png)
-
-### 3. Listening (processing your speech)
-
-![alt text](figures/11.png)
-
-### 4. Speaking (XiaoZhi is responding to you)
-
-![alt text](figures/12.png)
-
-### 5. Sleep mode (low power)
-
-![alt text](figures/13.png)
-
-> To exit sleep: press the button → wait for “Standby” → interaction becomes available.
-
-### Running Effect
-
-* After flashing, the device will start the sample automatically on power-up.
-* Press the top button once to enter the **Listening** state and interact with the device.
-  ![alt text](figures/3.png)
-
-## Notes
-
-* For first-time use, visit the [XiaoZhi official website](https://xiaozhi.me/) to complete backend binding.
-  ![alt text](figures/2.png)
-  Press the user button to display the verification code on the screen.
-
-* Please ensure the WiFi SSID and password are correct and that you are using a **2.4GHz network**.
-
-* The device requires an Internet connection to function properly.
-
-* If you need to modify the **graphical configuration**, use the following tools:
-
-```
-tools/device-configurator/device-configurator.exe
-libs/TARGET_APP_KIT_PSE84_EVAL_EPC2/config/design.modus
-```
-
-* Save changes and regenerate code after modification.
-
-## Startup Sequence
+## 启动顺序
 
 ```
 +------------------+
 |   Secure M33     |
-|  (Secure Core)   |
+|  (安全核心)      |
 +------------------+
-          |
-          v
+         |
+         v
 +------------------+
 |       M33        |
-| (Non-Secure Core)|
+|  (非安全核心)    |
 +------------------+
-          |
-          v
+         |
+         v
 +-------------------+
 |       M55         |
-| (Application Core)|
+|  (应用核心)       |
 +-------------------+
 ```
 
-⚠️ Flash in this order strictly to ensure proper operation.
+⚠️ 请严格按照此顺序烧录固件以确保正常运行。
 
----
+## 注意事项
 
-* If the example does not run, first compile and flash **Edgi_Talk_M33_Blink_LED**.
-* To enable M55:
+- 首次使用需访问 [小智官网](https://xiaozhi.me/) 完成后端绑定
+- 确保 WiFi SSID 和密码正确，使用 **2.4GHz 网络**
+- 设备需要网络连接才能正常工作
+- 修改图形配置需使用以下工具：
+  - `tools/device-configurator/device-configurator.exe`
+  - `libs/TARGET_APP_KIT_PSE84_EVAL_EPC2/config/design.modus`
+
+## 启用 M55 核心
+
+如需启用 M55 核心进行机器学习推理，请在 menuconfig 中配置：
 
 ```
 RT-Thread Settings --> Hardware --> select SOC Multi Core Mode --> Enable CM55 Core
 ```
-![config](figures/config.png)
+
+## 云端服务
+
+本开发板代码配合云端服务使用，云端代码位于：`../edgi-talk-cough-cloud/`
+
+云端提供以下功能：
+
+- 设备管理与认证
+- 咳嗽数据存储与分析
+- 健康报告生成
+- 告警规则配置
+
+---
+
+**项目维护者**: 儿童咳嗽检测项目组  
+**平台**: Edgi-Talk + RT-Thread  
+**版本**: 1.0.0
