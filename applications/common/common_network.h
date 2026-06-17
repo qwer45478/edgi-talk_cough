@@ -53,7 +53,7 @@ const common_network_t *common_network_get(void);
  */
 int common_network_ntp_sync(void);
 
-/* NTP sync configuration */  // @yyc edit: NTP增强：重试+定时校准
+/* NTP sync configuration */  // @yyc edit
 #define NTP_SYNC_MAX_RETRIES     3       /* Max retry attempts on failure */
 #define NTP_RESYNC_INTERVAL_MS   1800000 /* Periodic resync interval (30 min) */
 
@@ -63,7 +63,7 @@ int common_network_ntp_sync(void);
  */
 rt_bool_t common_network_ntp_is_synced(void);
 
-/* NTP status notification callback type */  // @yyc edit: NTP状态通知UI
+/* NTP status notification callback type */  // @yyc edit
 typedef void (*common_network_ntp_status_cb_t)(rt_bool_t synced);
 
 /**

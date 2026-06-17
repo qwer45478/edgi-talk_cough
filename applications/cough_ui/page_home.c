@@ -1,11 +1,12 @@
 /*
- * page_home.c ï¿½ï¿½ Real-time monitoring page (migrated from original cough_ui.c)
+ * page_home.c -- Real-time monitoring page (migrated from original cough_ui.c)
  *
- * Layout (inside 512ï¿½ï¿½744 tile):
+ * Layout (inside 512x744 tile):
  *   Waveform chart   (380px)
  *   PCM level bar    (80px)
  *   Three-column info: Cough | Day/Night | Env  (120px)
  *   System info + Reminder    (120px)
+ *   Current Time     (50px)
  */
 
 #include <rtthread.h>
@@ -50,10 +51,10 @@ static int         s_hist_pos = 0;
 /* Cached state text for info panel */
 static char s_state_text[16] = "IDLE";
 
-/* Time update timer callback (forward declaration) */  // @yyc edit: é¦–é¡µæ—¶é—´æ˜¾ç¤º
+/* Time update timer callback (forward declaration) */  // @yyc edit
 static void time_timer_callback(lv_timer_t *t);
 
-/* NTP status callback (forward declaration) */  // @yyc edit: NTPçŠ¶æ€é€šçŸ¥UI
+/* NTP status callback (forward declaration) */  // @yyc edit
 static void ntp_status_callback(rt_bool_t synced);
 
 /* ================================================================
@@ -64,7 +65,7 @@ void page_home_create(lv_obj_t *parent)
     /* Content area starts at 10px from top of tile, pad 12 left */
     lv_coord_t y = 10;
 
-    /* ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 1. Chart card ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */
+    /* é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?· 1. Chart card é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?· */
     s_chart_panel = ui_create_card(parent, CONTENT_W, 370);
     lv_obj_set_pos(s_chart_panel, 12, y);
 
@@ -140,7 +141,7 @@ void page_home_create(lv_obj_t *parent)
 
     y += 370 + 10;
 
-    /* ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 2. Level-bar card ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */
+    /* é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?· 2. Level-bar card é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?· */
     s_bar_panel = ui_create_card(parent, CONTENT_W, 80);
     lv_obj_set_pos(s_bar_panel, 12, y);
 
@@ -179,7 +180,7 @@ void page_home_create(lv_obj_t *parent)
 
     y += 80 + 10;
 
-    /* ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 3. Three-column info: Cough | Day/Night | Env ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */
+    /* é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?· 3. Three-column info: Cough | Day/Night | Env é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?·é??æ?¤æ?· */
     lv_coord_t col_w = (CONTENT_W - 2 * 8) / 3;
 
     /* Cough counter */
@@ -278,14 +279,14 @@ void page_home_create(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_label_time, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_align(s_label_time, LV_ALIGN_TOP_RIGHT, 0, -2);
 
-    /* Register NTP status callback */  // @yyc edit: NTPçŠ¶æ€é€šçŸ¥UI
+    /* Register NTP status callback */  // @yyc edit
     common_network_ntp_set_status_callback(ntp_status_callback);
 
     /* Start LVGL timer to update time every second */
     s_timer_time = lv_timer_create(time_timer_callback, 1000, RT_NULL);
 }
 
-static void time_timer_callback(lv_timer_t *t)  // @yyc edit: é¦–é¡µæ—¶é—´æ˜¾ç¤º
+static void time_timer_callback(lv_timer_t *t)  // @yyc edit
 {
     (void)t;
     time_t now = time(RT_NULL);
@@ -297,7 +298,7 @@ static void time_timer_callback(lv_timer_t *t)  // @yyc edit: é¦–é¡µæ—¶é—´æ˜¾ç¤º
     }
 }
 
-static void ntp_status_callback(rt_bool_t synced)  // @yyc edit: NTPçŠ¶æ€é€šçŸ¥UI
+static void ntp_status_callback(rt_bool_t synced)  // @yyc edit
 {
     if (synced && s_label_time)
     {
@@ -398,10 +399,55 @@ void page_home_push_cough(void)
     s_cough_flash_tick = rt_tick_get();
 }
 
+/* Get comfort level string based on temp and humidity */  // @yyc edit
+static const char *get_comfort_str(float temp, float hum)
+{
+    int temp_score = 0;  /* -1=cold, 0=ok, 1=hot */
+    int hum_score = 0;    /* -1=dry, 0=ok, 1=wet */
+
+    if (temp < 18.0f)
+        temp_score = -1;
+    else if (temp > 28.0f)
+        temp_score = 1;
+
+    if (hum < 30.0f)
+        hum_score = -1;
+    else if (hum > 70.0f)
+        hum_score = 1;
+
+    if (temp_score == 0 && hum_score == 0)
+        return "OK";
+
+    if (temp_score == -1 && hum_score == -1)
+        return "Cold+Dry";
+    if (temp_score == -1 && hum_score == 0)
+        return "Cool";
+    if (temp_score == -1 && hum_score == 1)
+        return "Cold+Wet";
+
+    if (temp_score == 0 && hum_score == -1)
+        return "Dry";
+    if (temp_score == 0 && hum_score == 1)
+        return "Humid";
+
+    if (temp_score == 1 && hum_score == -1)
+        return "Hot+Dry";
+    if (temp_score == 1 && hum_score == 0)
+        return "Warm";
+    if (temp_score == 1 && hum_score == 1)
+        return "Hot+Wet";
+
+    return "OK";
+}
+
 void page_home_update_env(float temp, float hum)
 {
     if (s_label_env)
-        lv_label_set_text_fmt(s_label_env, "%.1f \xC2\xB0""C\n%.1f %%RH", temp, hum);
+    {
+        const char *comfort = get_comfort_str(temp, hum);
+        lv_label_set_text_fmt(s_label_env, "%.1f \xC2\xB0""C\n%.1f %%RH\n%s",
+                              temp, hum, comfort);
+    }
 }
 
 void page_home_update_stats(rt_uint32_t total, rt_uint32_t day,

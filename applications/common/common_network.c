@@ -258,7 +258,7 @@ rt_bool_t common_network_ntp_is_synced(void)
     return s_ntp_synced;
 }
 
-void common_network_ntp_set_status_callback(common_network_ntp_status_cb_t callback)  // @yyc edit: NTP状态通知UI
+void common_network_ntp_set_status_callback(common_network_ntp_status_cb_t callback)  // @yyc edit
 {
     s_ntp_status_cb = callback;
 }
@@ -324,7 +324,7 @@ int common_network_ntp_sync(void)
               t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
               t->tm_hour, t->tm_min, t->tm_sec);
 
-        /* Notify UI of NTP sync success */  // @yyc edit: NTP状态通知UI
+        /* Notify UI of NTP sync success */  // @yyc edit
         if (s_ntp_status_cb)
         {
             s_ntp_status_cb(RT_TRUE);
@@ -439,7 +439,7 @@ static void http_test(int argc, char **argv)
 MSH_CMD_EXPORT(http_test, HTTP GET/POST test command);
 #endif
 
-/* ── MSH command: ntp ────────────────────────────────────────────── */  // @yyc edit: NTP MSH命令
+/* ── MSH command: ntp ────────────────────────────────────────────── */  // @yyc edit
 #ifdef PKG_NETUTILS_NTP
 #include <time.h>
 static void ntp_status(void)
