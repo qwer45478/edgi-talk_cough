@@ -53,6 +53,46 @@ const common_network_t *common_network_get(void);
  */
 int common_network_ntp_sync(void);
 
+/* NTP sync configuration */  // @yyc edit: NTP增强：重试+定时校准
+#define NTP_SYNC_MAX_RETRIES     3       /* Max retry attempts on failure */
+#define NTP_RESYNC_INTERVAL_MS   1800000 /* Periodic resync interval (30 min) */
+
+/**
+ * Check if NTP has ever synced successfully.
+ * Returns RT_TRUE if synced, RT_FALSE otherwise.
+ */
+rt_bool_t common_network_ntp_is_synced(void);
+
+/* NTP status notification callback type */  // @yyc edit: NTP状态通知UI
+typedef void (*common_network_ntp_status_cb_t)(rt_bool_t synced);
+
+/**
+ * Register a callback to be notified when NTP sync status changes.
+ * Only one callback can be registered at a time.
+ * callback: function to call when NTP status changes (pass RT_NULL to unregister)
+ */
+void common_network_ntp_set_status_callback(common_network_ntp_status_cb_t callback);
+
+/**
+ * Set the periodic NTP resync interval.
+ * Must be called before starting the resync timer.
+ * interval_ms: interval in milliseconds (default: NTP_RESYNC_INTERVAL_MS)
+ */
+void common_network_ntp_set_resync_interval(rt_uint32_t interval_ms);
+
+/**
+ * Start periodic NTP resync timer.
+ * This will automatically sync time every interval_ms milliseconds.
+ * Returns RT_EOK on success, negative on failure.
+ */
+int common_network_ntp_resync_timer_start(void);
+
+/**
+ * Stop periodic NTP resync timer.
+ * Returns RT_EOK on success, negative on failure.
+ */
+int common_network_ntp_resync_timer_stop(void);
+
 /* AP mode for WiFi configuration */
 typedef enum
 {

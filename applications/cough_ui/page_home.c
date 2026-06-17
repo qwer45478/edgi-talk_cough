@@ -1,7 +1,7 @@
 /*
- * page_home.c — Real-time monitoring page (migrated from original cough_ui.c)
+ * page_home.c �� Real-time monitoring page (migrated from original cough_ui.c)
  *
- * Layout (inside 512×744 tile):
+ * Layout (inside 512��744 tile):
  *   Waveform chart   (380px)
  *   PCM level bar    (80px)
  *   Three-column info: Cough | Day/Night | Env  (120px)
@@ -11,11 +11,13 @@
 #include <rtthread.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #include <lvgl.h>
 
 #include "cough_ui_pages.h"
+#include "common_network.h"
 
-/* ── Widgets ────────────────────────────────────────────────────── */
+/* Widgets */
 static lv_obj_t *s_chart_panel     = RT_NULL;
 static lv_obj_t *s_chart           = RT_NULL;
 static lv_chart_series_t *s_ser       = RT_NULL;
@@ -31,8 +33,10 @@ static lv_obj_t *s_label_night_cnt = RT_NULL;
 static lv_obj_t *s_label_env       = RT_NULL;
 static lv_obj_t *s_label_info      = RT_NULL;
 static lv_obj_t *s_label_remind    = RT_NULL;
+static lv_obj_t *s_label_time      = RT_NULL;  /* Time display label */
+static lv_obj_t *s_timer_time      = RT_NULL;  /* LVGL timer for time update */
 
-/* ── State ──────────────────────────────────────────────────────── */
+/* State */
 static uint32_t  s_cough_count     = 0;
 static rt_uint16_t s_last_peak     = 0;
 static rt_bool_t s_cough_flash     = RT_FALSE;
@@ -46,6 +50,12 @@ static int         s_hist_pos = 0;
 /* Cached state text for info panel */
 static char s_state_text[16] = "IDLE";
 
+/* Time update timer callback (forward declaration) */  // @yyc edit: 首页时间显示
+static void time_timer_callback(lv_timer_t *t);
+
+/* NTP status callback (forward declaration) */  // @yyc edit: NTP状态通知UI
+static void ntp_status_callback(rt_bool_t synced);
+
 /* ================================================================
  *  page_home_create
  * ================================================================ */
@@ -54,7 +64,7 @@ void page_home_create(lv_obj_t *parent)
     /* Content area starts at 10px from top of tile, pad 12 left */
     lv_coord_t y = 10;
 
-    /* ─── 1. Chart card ────────────────────────────────────────── */
+    /* ������ 1. Chart card ������������������������������������������������������������������������������������ */
     s_chart_panel = ui_create_card(parent, CONTENT_W, 370);
     lv_obj_set_pos(s_chart_panel, 12, y);
 
@@ -130,7 +140,7 @@ void page_home_create(lv_obj_t *parent)
 
     y += 370 + 10;
 
-    /* ─── 2. Level-bar card ────────────────────────────────────── */
+    /* ������ 2. Level-bar card ���������������������������������������������������������������������������� */
     s_bar_panel = ui_create_card(parent, CONTENT_W, 80);
     lv_obj_set_pos(s_bar_panel, 12, y);
 
@@ -169,7 +179,7 @@ void page_home_create(lv_obj_t *parent)
 
     y += 80 + 10;
 
-    /* ─── 3. Three-column info: Cough | Day/Night | Env ────────── */
+    /* ������ 3. Three-column info: Cough | Day/Night | Env �������������������� */
     lv_coord_t col_w = (CONTENT_W - 2 * 8) / 3;
 
     /* Cough counter */
@@ -220,7 +230,7 @@ void page_home_create(lv_obj_t *parent)
 
     y += 120 + 10;
 
-    /* ─── 4. Info + Reminder row ───────────────────────────────── */
+    /* Section 4. Info + Reminder row */
     s_label_info = RT_NULL; /* Will be created below */
 
     lv_obj_t *info_card = ui_create_card(parent, CONTENT_W - 160 - 12, 120);
@@ -253,6 +263,50 @@ void page_home_create(lv_obj_t *parent)
     lv_obj_set_style_text_line_space(s_label_remind, 4, LV_PART_MAIN);
     lv_obj_set_width(s_label_remind, lv_pct(100));
     lv_obj_align(s_label_remind, LV_ALIGN_CENTER, 0, 8);
+
+    /* Time display card */  // @yyc edit: ??????
+    y += 120 + 10;  /* Move to next row */
+    lv_obj_t *time_card = ui_create_card(parent, CONTENT_W, 50);
+    lv_obj_set_pos(time_card, 12, y);
+
+    lv_obj_t *time_hdr = ui_create_section_label(time_card, "CURRENT TIME");
+    lv_obj_align(time_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_label_time = lv_label_create(time_card);
+    lv_label_set_text(s_label_time, "--:--:--");
+    lv_obj_set_style_text_color(s_label_time, lv_color_hex(CLR_ACCENT_CYAN), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_label_time, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_align(s_label_time, LV_ALIGN_TOP_RIGHT, 0, -2);
+
+    /* Register NTP status callback */  // @yyc edit: NTP状态通知UI
+    common_network_ntp_set_status_callback(ntp_status_callback);
+
+    /* Start LVGL timer to update time every second */
+    s_timer_time = lv_timer_create(time_timer_callback, 1000, RT_NULL);
+}
+
+static void time_timer_callback(lv_timer_t *t)  // @yyc edit: 首页时间显示
+{
+    (void)t;
+    time_t now = time(RT_NULL);
+    struct tm *t_local = localtime(&now);
+    if (s_label_time && t_local)
+    {
+        lv_label_set_text_fmt(s_label_time, "%02d:%02d:%02d",
+                              t_local->tm_hour, t_local->tm_min, t_local->tm_sec);
+    }
+}
+
+static void ntp_status_callback(rt_bool_t synced)  // @yyc edit: NTP状态通知UI
+{
+    if (synced && s_label_time)
+    {
+        /* NTP sync succeeded, update time display immediately */
+        time_t now = time(RT_NULL);
+        struct tm *t_local = localtime(&now);
+        lv_label_set_text_fmt(s_label_time, "%02d:%02d:%02d",
+                              t_local->tm_hour, t_local->tm_min, t_local->tm_sec);
+    }
 }
 
 /* ================================================================

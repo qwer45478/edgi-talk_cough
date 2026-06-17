@@ -241,8 +241,68 @@ const common_network_t *common_network_get(void)
     return &s_network;
 }
 
-/* ── NTP time sync ────────────────────────────────────────────────── */
+/* ── NTP time sync ────────────────────────────────────────────────── */  // @yyc edit: NTP增强：重试+定时校准
 static rt_bool_t s_ntp_synced = RT_FALSE;
+static int s_ntp_retry_count = 0;
+static common_network_ntp_status_cb_t s_ntp_status_cb = RT_NULL;  /* NTP status callback */  // @yyc edit: NTP状态通知UI
+
+/* Periodic resync timer */
+static struct rt_timer s_ntp_resync_timer;
+static rt_uint32_t s_ntp_resync_interval_ms = NTP_RESYNC_INTERVAL_MS;
+
+/* Forward declarations */
+static void ntp_resync_timer_callback(void *parameter);
+
+rt_bool_t common_network_ntp_is_synced(void)
+{
+    return s_ntp_synced;
+}
+
+void common_network_ntp_set_status_callback(common_network_ntp_status_cb_t callback)  // @yyc edit: NTP状态通知UI
+{
+    s_ntp_status_cb = callback;
+}
+
+void common_network_ntp_set_resync_interval(rt_uint32_t interval_ms)
+{
+    s_ntp_resync_interval_ms = interval_ms;
+}
+
+int common_network_ntp_resync_timer_start(void)
+{
+    if (s_ntp_resync_timer.parent.flag & RT_TIMER_FLAG_ACTIVATED)
+    {
+        LOG_W("NTP: resync timer already started");
+        return RT_EOK;
+    }
+
+    rt_timer_start(&s_ntp_resync_timer);
+    LOG_I("NTP: resync timer started (interval=%ums)", s_ntp_resync_interval_ms);
+    return RT_EOK;
+}
+
+int common_network_ntp_resync_timer_stop(void)
+{
+    if (!(s_ntp_resync_timer.parent.flag & RT_TIMER_FLAG_ACTIVATED))
+    {
+        return RT_EOK;
+    }
+
+    rt_timer_stop(&s_ntp_resync_timer);
+    LOG_I("NTP: resync timer stopped");
+    return RT_EOK;
+}
+
+static void ntp_resync_timer_callback(void *parameter)
+{
+    (void)parameter;
+    LOG_I("NTP: periodic resync triggered");
+    int result = common_network_ntp_sync();
+    if (result != RT_EOK)
+    {
+        LOG_W("NTP: periodic resync failed, will retry next interval");
+    }
+}
 
 int common_network_ntp_sync(void)
 {
@@ -253,21 +313,51 @@ int common_network_ntp_sync(void)
         return -RT_EBUSY;
     }
 
-    LOG_I("NTP: syncing time...");
+    LOG_I("NTP: syncing time... (attempt %d/%d)", s_ntp_retry_count + 1, NTP_SYNC_MAX_RETRIES);
     time_t now = ntp_sync_to_rtc(RT_NULL);   /* uses servers from rtconfig.h */
     if (now > 0)
     {
         s_ntp_synced = RT_TRUE;
+        s_ntp_retry_count = 0;  /* Reset retry counter on success */
         struct tm *t = localtime(&now);
         LOG_I("NTP: time synced — %04d-%02d-%02d %02d:%02d:%02d",
               t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
               t->tm_hour, t->tm_min, t->tm_sec);
+
+        /* Notify UI of NTP sync success */  // @yyc edit: NTP状态通知UI
+        if (s_ntp_status_cb)
+        {
+            s_ntp_status_cb(RT_TRUE);
+        }
+
+        /* Start periodic resync timer on first successful sync */
+        if (!(s_ntp_resync_timer.parent.flag & RT_TIMER_FLAG_ACTIVATED))
+        {
+            rt_timer_init(&s_ntp_resync_timer, "ntp_resync",
+                          ntp_resync_timer_callback, RT_NULL,
+                          rt_tick_from_millisecond(s_ntp_resync_interval_ms),
+                          RT_TIMER_FLAG_PERIODIC | RT_TIMER_FLAG_SOFT_TIMER);
+            common_network_ntp_resync_timer_start();
+        }
+
         return RT_EOK;
     }
     else
     {
-        LOG_W("NTP: sync failed");
-        return -RT_ERROR;
+        s_ntp_retry_count++;
+        if (s_ntp_retry_count < NTP_SYNC_MAX_RETRIES)
+        {
+            LOG_W("NTP: sync failed, retrying in 2s... (%d/%d)",
+                  s_ntp_retry_count, NTP_SYNC_MAX_RETRIES);
+            rt_thread_mdelay(2000);
+            return common_network_ntp_sync();  /* Recursive retry */
+        }
+        else
+        {
+            LOG_E("NTP: sync failed after %d attempts", NTP_SYNC_MAX_RETRIES);
+            s_ntp_retry_count = 0;  /* Reset for next manual sync */
+            return -RT_ERROR;
+        }
     }
 #else
     LOG_W("NTP: not compiled in (PKG_NETUTILS_NTP not defined)");
@@ -347,6 +437,94 @@ static void http_test(int argc, char **argv)
     }
 }
 MSH_CMD_EXPORT(http_test, HTTP GET/POST test command);
+#endif
+
+/* ── MSH command: ntp ────────────────────────────────────────────── */  // @yyc edit: NTP MSH命令
+#ifdef PKG_NETUTILS_NTP
+#include <time.h>
+static void ntp_status(void)
+{
+    time_t now = time(RT_NULL);
+    struct tm *t = localtime(&now);
+
+    rt_kprintf("=== NTP Status ===\n");
+    rt_kprintf("Synced: %s\n", s_ntp_synced ? "YES" : "NO");
+    rt_kprintf("Current time: %04d-%02d-%02d %02d:%02d:%02d\n",
+                t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+                t->tm_hour, t->tm_min, t->tm_sec);
+    rt_kprintf("Resync timer: %s\n",
+                (s_ntp_resync_timer.parent.flag & RT_TIMER_FLAG_ACTIVATED) ? "ACTIVE" : "STOPPED");
+    rt_kprintf("Resync interval: %u ms\n", s_ntp_resync_interval_ms);
+}
+
+static void ntp_sync_cmd(int argc, char **argv)
+{
+    if (argc == 1)
+    {
+        rt_kprintf("Usage: ntp_sync [force]\n");
+        rt_kprintf("  Without args: normal sync with retry\n");
+        rt_kprintf("  force: force sync even if already synced\n");
+        return;
+    }
+
+    if (strcmp(argv[1], "force") == 0)
+    {
+        s_ntp_synced = RT_FALSE;
+        s_ntp_retry_count = 0;
+    }
+
+    int result = common_network_ntp_sync();
+    if (result == RT_EOK)
+    {
+        rt_kprintf("NTP sync: SUCCESS\n");
+        ntp_status();
+    }
+    else
+    {
+        rt_kprintf("NTP sync: FAILED (%d)\n", result);
+    }
+}
+
+static void ntp_resync_cmd(int argc, char **argv)
+{
+    if (argc == 1)
+    {
+        rt_kprintf("Usage: ntp_resync [start|stop|interval <ms>]\n");
+        rt_kprintf("  start: start periodic resync timer\n");
+        rt_kprintf("  stop: stop periodic resync timer\n");
+        rt_kprintf("  interval <ms>: set resync interval in ms\n");
+        return;
+    }
+
+    if (strcmp(argv[1], "start") == 0)
+    {
+        int result = common_network_ntp_resync_timer_start();
+        rt_kprintf("NTP resync start: %s\n", result == RT_EOK ? "OK" : "FAILED");
+    }
+    else if (strcmp(argv[1], "stop") == 0)
+    {
+        int result = common_network_ntp_resync_timer_stop();
+        rt_kprintf("NTP resync stop: %s\n", result == RT_EOK ? "OK" : "FAILED");
+    }
+    else if (strcmp(argv[1], "interval") == 0)
+    {
+        if (argc < 3)
+        {
+            rt_kprintf("Error: missing interval value\n");
+            return;
+        }
+        rt_uint32_t interval = atoi(argv[2]);
+        common_network_ntp_set_resync_interval(interval);
+        rt_kprintf("NTP resync interval set to %u ms\n", interval);
+    }
+    else
+    {
+        rt_kprintf("Unknown command: %s\n", argv[1]);
+    }
+}
+
+MSH_CMD_EXPORT(ntp_sync_cmd, ntp_sync - Sync NTP time [force]);
+MSH_CMD_EXPORT(ntp_resync_cmd, ntp_resync - Control NTP periodic resync timer);
 #endif
 
 /* ── AP mode for WiFi configuration ──────────────────────────── */  // @yyc edit: AP模式WiFi配网功能
