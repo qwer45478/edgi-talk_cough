@@ -182,6 +182,47 @@ OK
 
 ---
 
-## 七、阶段性工作总结
+## 七、咳嗽事件日志
+
+### 7.1 功能描述
+记录每次咳嗽事件的时间戳和白天/夜晚标志，方便家长回顾和分析。
+
+### 7.2 修改文件
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `applications/common/common_cough_log.h` | 新建 | 头文件 |
+| `applications/common/common_cough_log.c` | 新建 | 实现文件 |
+| `applications/common/app_common.h` | 修改 | 添加初始化标志 |
+| `applications/common/app_common.c` | 修改 | 添加初始化调用 |
+| `applications/cough_ui/page_home.c` | 修改 | 每次检测到咳嗽时记录 |
+
+### 7.3 数据结构
+```c
+typedef struct
+{
+    time_t timestamp;       /* Unix timestamp */
+    rt_bool_t is_day;       /* RT_TRUE = day, RT_FALSE = night */
+} cough_log_entry_t;
+```
+
+### 7.4 存储策略
+| 项目 | 说明 |
+|------|------|
+| 存储方式 | 内存循环缓冲区 |
+| 最大条目 | 100 条 |
+| 线程安全 | 使用互斥锁保护 |
+| 白天定义 | 6:00 - 18:00 |
+
+### 7.5 API 接口
+```c
+void common_cough_log_init(void);          /* 初始化 */
+void common_cough_log_add(rt_bool_t is_day);  /* 添加记录 */
+int common_cough_log_count(void);          /* 获取记录数 */
+int common_cough_log_get_recent(...);      /* 获取最近记录 */
+```
+
+---
+
+## 八、阶段性工作总结
 
 以上所有模块均已完成。

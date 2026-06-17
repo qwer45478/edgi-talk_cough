@@ -2,6 +2,7 @@
 
 #include "common_audio_capture.h"
 #include "common_audio_playback.h"
+#include "common_cough_log.h"  // @yyc edit
 #include "common_display.h"
 #include "common_env.h"
 #include "common_key.h"
@@ -73,6 +74,10 @@ int app_common_init(rt_uint32_t init_mask)
     if (init_mask & APP_COMMON_INIT_LED)
     {
         mark_module(APP_COMMON_INIT_LED, common_led_init());
+    }
+    if (init_mask & APP_COMMON_INIT_COUGH_LOG)  // @yyc edit
+    {
+        mark_module(APP_COMMON_INIT_COUGH_LOG, common_cough_log_init());
     }
 
     return RT_EOK;
