@@ -1,5 +1,5 @@
 /*
- * cough_stat.c â€” Cough event statistics engine
+ * cough_stat.c ¡ª Cough event statistics engine
  *
  * Maintains hourly/daily counters, detects burst episodes,
  * tracks night/day distribution, and logs to SD card.
@@ -21,13 +21,14 @@
 #include "../common/common_env.h"
 #include "../common/common_storage.h"
 #include "../common/common_led.h"
+#include "../common/common_config.h"  // @yyc for common_config_get_device_id()
 
 static cough_stat_daily_t  s_daily;
 static cough_stat_recent_t s_recent;
 static rt_mutex_t s_stat_mutex = RT_NULL;
 static rt_timer_t s_midnight_timer = RT_NULL;
 
-/* â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Helpers ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 
 static rt_uint32_t get_unix_timestamp(void)
 {
@@ -90,7 +91,7 @@ static void recent_push(rt_uint32_t ts)
     }
 }
 
-/* â”€â”€ Midnight rollover timer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Midnight rollover timer ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 static void midnight_check_callback(void *parameter)
 {
     RT_UNUSED(parameter);
@@ -106,7 +107,7 @@ static void midnight_check_callback(void *parameter)
     }
 }
 
-/* â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Public API ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 
 int cough_stat_init(void)
 {
@@ -130,6 +131,8 @@ int cough_stat_init(void)
     {
         rt_timer_start(s_midnight_timer);
     }
+
+    cough_event_queue_init();  /* @yyc ³õÊ¼»¯ÊÂ¼þ¶ÓÁÐ */
 
     LOG_I("cough statistics engine initialized (date=%lu)", (unsigned long)s_daily.date_ymd);
     return RT_EOK;
@@ -209,6 +212,14 @@ void cough_stat_record_event(float confidence)
         s_daily.burst_active = RT_FALSE;
     }
 
+    /* @yyc ½«ÊÂ¼þ¼ÓÈë¶ÓÁÐÓÃÓÚÅúÁ¿ÉÏ´«µ½ÔÆ¶Ë */
+    cough_event_t ev;
+    ev.timestamp = ts;
+    ev.confidence = confidence;
+    ev.temperature_c = s_daily.last_temperature;
+    ev.humidity_pct = s_daily.last_humidity;
+    cough_event_queue_push(&ev);
+
     rt_mutex_release(s_stat_mutex);
 }
 
@@ -275,11 +286,38 @@ int cough_stat_flush_to_storage(void)
 int cough_stat_to_json(char *buf, rt_size_t size)
 {
     int len;
+    rt_uint32_t now_ts;  // @yyc
+    const char *device_id;  // @yyc
+    rt_uint32_t ymd;
+    rt_uint32_t total, day_count, night_count, burst_count;
+    float last_temp, last_hum;
+    rt_uint32_t last_event_ts;
+    rt_uint32_t hourly[COUGH_STAT_HOURS_PER_DAY];  // @yyc
 
     rt_mutex_take(s_stat_mutex, RT_WAITING_FOREVER);
 
+    // @yyc ¸´ÖÆÊý¾Ý±ÜÃâ³¤Ê±¼ä³ÖËø£¬²¢»ñÈ¡device_idºÍµ±Ç°Ê±¼ä´Á
+    now_ts = time(RT_NULL);
+    device_id = common_config_get_device_id();
+    ymd = s_daily.date_ymd;
+    total = s_daily.total_today;
+    day_count = s_daily.day_count;
+    night_count = s_daily.night_count;
+    burst_count = s_daily.burst_count;
+    last_temp = s_daily.last_temperature;
+    last_hum = s_daily.last_humidity;
+    last_event_ts = s_daily.last_event_ts;
+    for (int h = 0; h < COUGH_STAT_HOURS_PER_DAY; h++) {
+        hourly[h] = s_daily.hourly[h];
+    }
+
+    rt_mutex_release(s_stat_mutex);
+
+    // @yyc Ìí¼Ó device_id ºÍ ts ×Ö¶ÎÒÔÆ¥ÅäÔÆ¶Ë½Ó¿Ú¸ñÊ½
     len = rt_snprintf(buf, size,
         "{"
+        "\"device_id\":\"%s\","
+        "\"ts\":%lu,"
         "\"date\":%lu,"
         "\"total\":%lu,"
         "\"day\":%lu,"
@@ -289,24 +327,131 @@ int cough_stat_to_json(char *buf, rt_size_t size)
         "\"hum\":%.1f,"
         "\"last_ts\":%lu,"
         "\"hourly\":[",
-        (unsigned long)s_daily.date_ymd,
-        (unsigned long)s_daily.total_today,
-        (unsigned long)s_daily.day_count,
-        (unsigned long)s_daily.night_count,
-        (unsigned long)s_daily.burst_count,
-        s_daily.last_temperature,
-        s_daily.last_humidity,
-        (unsigned long)s_daily.last_event_ts);
+        device_id,
+        (unsigned long)now_ts,
+        (unsigned long)ymd,
+        (unsigned long)total,
+        (unsigned long)day_count,
+        (unsigned long)night_count,
+        (unsigned long)burst_count,
+        last_temp,
+        last_hum,
+        (unsigned long)last_event_ts);
 
     for (int h = 0; h < COUGH_STAT_HOURS_PER_DAY && len < (int)size - 20; h++)
     {
         len += rt_snprintf(buf + len, size - len, "%s%lu",
                            (h > 0) ? "," : "",
-                           (unsigned long)s_daily.hourly[h]);
+                           (unsigned long)hourly[h]);
     }
 
     len += rt_snprintf(buf + len, size - len, "]}");
 
-    rt_mutex_release(s_stat_mutex);
+    return len;
+}
+
+/* @yyc ÐÂÔö£ºÊÂ¼þ¶ÓÁÐ - ÓÃÓÚÅúÁ¿ÉÏ´«¿ÈËÔÊÂ¼þµ½ÔÆ¶Ë */
+/* Ring buffer for individual cough events (batch upload) */
+#define COUGH_EVENT_QUEUE_SIZE  64
+static cough_event_t s_event_queue[COUGH_EVENT_QUEUE_SIZE];  /* @yyc ÊÂ¼þ¶ÓÁÐ */
+static int s_event_queue_head = 0;  /* @yyc ¶ÓÁÐÍ·£¨Ð´ÈëÎ»ÖÃ£© */
+static int s_event_queue_tail = 0;  /* @yyc ¶ÓÁÐÎ²£¨¶ÁÈ¡Î»ÖÃ£© */
+static int s_event_queue_count = 0;  /* @yyc µ±Ç°ÊÂ¼þÊýÁ¿ */
+static rt_mutex_t s_event_queue_mutex = RT_NULL;  /* @yyc ¶ÓÁÐ»¥³âËø */
+
+void cough_event_queue_init(void)
+{
+    if (s_event_queue_mutex == RT_NULL)
+    {
+        s_event_queue_mutex = rt_mutex_create("cough_eq", RT_IPC_FLAG_FIFO);
+    }
+    s_event_queue_head = 0;
+    s_event_queue_tail = 0;
+    s_event_queue_count = 0;
+    memset(s_event_queue, 0, sizeof(s_event_queue));
+}
+
+void cough_event_queue_push(const cough_event_t *event)
+{
+    if (event == RT_NULL || s_event_queue_mutex == RT_NULL)
+        return;
+
+    rt_mutex_take(s_event_queue_mutex, RT_WAITING_FOREVER);
+    if (s_event_queue_count < COUGH_EVENT_QUEUE_SIZE)
+    {
+        s_event_queue[s_event_queue_head] = *event;
+        s_event_queue_head = (s_event_queue_head + 1) % COUGH_EVENT_QUEUE_SIZE;
+        s_event_queue_count++;
+    }
+    else
+    {
+        LOG_W("Event queue full, dropping oldest event");
+        s_event_queue_tail = (s_event_queue_tail + 1) % COUGH_EVENT_QUEUE_SIZE;
+        s_event_queue[s_event_queue_head] = *event;
+        s_event_queue_head = (s_event_queue_head + 1) % COUGH_EVENT_QUEUE_SIZE;
+    }
+    rt_mutex_release(s_event_queue_mutex);
+}
+
+int cough_event_queue_pop_batch(cough_event_t *buf, int len)
+{
+    int i, count = 0;
+
+    if (buf == RT_NULL || len <= 0 || s_event_queue_mutex == RT_NULL)
+        return 0;
+
+    rt_mutex_take(s_event_queue_mutex, RT_WAITING_FOREVER);
+    count = (len < s_event_queue_count) ? len : s_event_queue_count;
+    for (i = 0; i < count; i++)
+    {
+        buf[i] = s_event_queue[s_event_queue_tail];
+        s_event_queue_tail = (s_event_queue_tail + 1) % COUGH_EVENT_QUEUE_SIZE;
+        s_event_queue_count--;
+    }
+    rt_mutex_release(s_event_queue_mutex);
+
+    return count;
+}
+
+int cough_event_queue_size(void)
+{
+    int count;
+    if (s_event_queue_mutex == RT_NULL)
+        return 0;
+    rt_mutex_take(s_event_queue_mutex, RT_WAITING_FOREVER);
+    count = s_event_queue_count;
+    rt_mutex_release(s_event_queue_mutex);
+    return count;
+}
+
+int cough_event_queue_to_json(char *buf, rt_size_t size, int max_events)
+{
+    int len = 0;
+    int i, count;
+    cough_event_t event;
+
+    if (buf == RT_NULL || size == 0)
+        return -1;
+
+    rt_mutex_take(s_event_queue_mutex, RT_WAITING_FOREVER);
+    count = (max_events < s_event_queue_count) ? max_events : s_event_queue_count;
+
+    len = rt_snprintf(buf, size, "[");
+    for (i = 0; i < count && len < (int)size - 50; i++)
+    {
+        int idx = (s_event_queue_tail + i) % COUGH_EVENT_QUEUE_SIZE;
+        event = s_event_queue[idx];
+        len += rt_snprintf(buf + len, size - len,
+                           "%s{\"event_time\":%lu,\"confidence\":%.2f,\"temperature_c\":%.1f,\"humidity_pct\":%.1f}",
+                           (i > 0) ? "," : "",
+                           (unsigned long)event.timestamp,
+                           event.confidence,
+                           event.temperature_c,
+                           event.humidity_pct);
+    }
+    if (len < (int)size)
+        len += rt_snprintf(buf + len, size - len, "]");
+
+    rt_mutex_release(s_event_queue_mutex);
     return len;
 }

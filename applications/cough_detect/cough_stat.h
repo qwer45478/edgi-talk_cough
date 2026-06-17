@@ -1,5 +1,5 @@
 /*
- * cough_stat.h â€” Cough event statistics engine
+ * cough_stat.h ¡ª Cough event statistics engine
  *
  * Tracks:
  *   - Hourly and daily cough counts
@@ -19,14 +19,14 @@
 extern "C" {
 #endif
 
-/* â”€â”€ Configuration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Configuration ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 #define COUGH_STAT_HOURS_PER_DAY    24
 #define COUGH_STAT_BURST_WINDOW_S   60    /* burst = N coughs in 60s     */
 #define COUGH_STAT_BURST_THRESHOLD  5     /* 5 coughs/min = burst        */
 #define COUGH_STAT_NIGHT_START_H    22    /* 22:00 = night start         */
 #define COUGH_STAT_NIGHT_END_H      6    /* 06:00 = night end           */
 
-/* â”€â”€ Data structures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Data structures ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 typedef struct
 {
     rt_uint32_t timestamp;          /* unix timestamp of event */
@@ -58,7 +58,7 @@ typedef struct
     int         count;
 } cough_stat_recent_t;
 
-/* â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Public API ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 
 /**
  * Initialize the statistics engine. Call once at startup after RTC is ready.
@@ -99,6 +99,41 @@ int cough_stat_flush_to_storage(void);
  * @return Number of bytes written (excluding null terminator)
  */
 int cough_stat_to_json(char *buf, rt_size_t size);
+
+/* @yyc ÐÂÔö£ºÊÂ¼þ¶ÓÁÐ API - ÓÃÓÚÅúÁ¿ÉÏ´«¿ÈËÔÊÂ¼þµ½ÔÆ¶Ë */
+/**
+ * Initialize the event queue. Called from cough_stat_init().
+ */
+void cough_event_queue_init(void);
+
+/**
+ * Push a cough event into the queue for batch upload.
+ * @param event  Pointer to cough event data
+ */
+void cough_event_queue_push(const cough_event_t *event);
+
+/**
+ * Pop multiple events from queue for batch upload.
+ * @param buf    Output buffer for events
+ * @param len    Max number of events to pop
+ * @return       Actual number of events popped
+ */
+int cough_event_queue_pop_batch(cough_event_t *buf, int len);
+
+/**
+ * Get current queue size.
+ * @return  Number of events currently in queue
+ */
+int cough_event_queue_size(void);
+
+/**
+ * Build a JSON array string from queue for batch upload.
+ * @param buf    Output buffer
+ * @param size   Buffer size
+ * @param max_events  Max events to include
+ * @return  Number of bytes written, or -1 on error
+ */
+int cough_event_queue_to_json(char *buf, rt_size_t size, int max_events);
 
 #ifdef __cplusplus
 }

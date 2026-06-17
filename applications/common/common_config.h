@@ -1,5 +1,5 @@
 /*
- * common_config.h â€” Persistent configuration storage (FlashDB KVDB on NOR Flash)
+ * common_config.h ¡ª Persistent configuration storage (FlashDB KVDB on NOR Flash)
  *
  * All settings survive power cycles. Backed by a 64 KB FAL partition "config"
  * using FlashDB's key-value database with automatic wear leveling.
@@ -14,18 +14,18 @@
 extern "C" {
 #endif
 
-/* â”€â”€ Key names (string literals reused across modules) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-#define CFG_KEY_THRESHOLD       "threshold"      /* float 0.20â€“0.80, default 0.35 */
-#define CFG_KEY_BRIGHTNESS      "brightness"     /* int   10â€“100,    default 80   */
+/* ©¤©¤ Key names (string literals reused across modules) ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
+#define CFG_KEY_THRESHOLD       "threshold"      /* float 0.20¨C0.80, default 0.35 */
+#define CFG_KEY_BRIGHTNESS      "brightness"     /* int   10¨C100,    default 80   */
 #define CFG_KEY_WIFI_SSID       "wifi_ssid"      /* string, max 31 chars */
 #define CFG_KEY_WIFI_PASS       "wifi_pass"      /* string, max 63 chars */
 #define CFG_KEY_SERVER_URL      "server_url"     /* string, max 127 chars */
 #define CFG_KEY_UPLOAD_EN       "upload_en"      /* int 0/1, default 1 */
 #define CFG_KEY_DEVICE_ID       "device_id"      /* string, 12-char hex */
-#define CFG_KEY_REMIND_FMT      "remind_%d"      /* remind_0 â€¦ remind_7 */
+#define CFG_KEY_REMIND_FMT      "remind_%d"      /* remind_0 ¡­ remind_7 */
 /* Remind value format: "HH:MM,enabled,label"  e.g. "08:00,1,Morning Med" */
 
-/* â”€â”€ Default values â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Default values ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 #define CFG_DEFAULT_THRESHOLD   0.35f
 #define CFG_DEFAULT_BRIGHTNESS  80
 #define CFG_DEFAULT_UPLOAD_EN   1
@@ -37,7 +37,7 @@ extern "C" {
  */
 int common_config_init(void);
 
-/* â”€â”€ Generic get/set (string values) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Generic get/set (string values) ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 
 /**
  * Read a string value by key. Returns length copied (excl. NUL), or 0 if not found.
@@ -49,7 +49,7 @@ int common_config_get_str(const char *key, char *buf, int buf_size);
  */
 int common_config_set_str(const char *key, const char *value);
 
-/* â”€â”€ Typed convenience helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ Typed convenience helpers ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 
 int   common_config_get_int(const char *key, int default_val);
 void  common_config_set_int(const char *key, int value);
@@ -57,7 +57,7 @@ void  common_config_set_int(const char *key, int value);
 float common_config_get_float(const char *key, float default_val);
 void  common_config_set_float(const char *key, float value);
 
-/* â”€â”€ High-level load/save for specific subsystems â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ©¤©¤ High-level load/save for specific subsystems ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 
 /**
  * Load ALL persisted settings and apply to subsystems
@@ -71,6 +71,15 @@ void common_config_load_all(void);
  * @param index  0 .. 7
  */
 void common_config_save_remind(int index);
+
+/**
+ * @brief Load all remind slots from flash into provided array.
+ * @param slots  Array to fill (size must be >= COUGH_REMIND_MAX_SLots)
+ * @param count  Number of slots to load (pass COUGH_REMIND_MAX_SLOTS)
+ * @return Number of slots actually loaded from flash.
+ * @note  Clears only slots that have valid flash data; leaves others untouched.
+ */
+int common_config_load_remind_all(void *slots, int count);
 
 /**
  * Get the unique device ID (generates on first boot).

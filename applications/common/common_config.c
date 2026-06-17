@@ -34,7 +34,7 @@ static struct fdb_default_kv_node s_default_kv_table[] =
     { CFG_KEY_UPLOAD_EN,  "1",     0 },
     { CFG_KEY_WIFI_SSID,  COMMON_NETWORK_DEFAULT_SSID,     0 },
     { CFG_KEY_WIFI_PASS,  COMMON_NETWORK_DEFAULT_PASSWORD,  0 },
-    { CFG_KEY_SERVER_URL, "",      0 },
+    { CFG_KEY_SERVER_URL, "http://192.168.137.1:8000", 0 },  // @yyc 云端服务器地址(局域网)
     { CFG_KEY_DEVICE_ID,  "",      0 },
 };
 
@@ -262,6 +262,41 @@ void common_config_save_remind(int index)
                 slot->enabled ? 1 : 0,
                 slot->label);
     common_config_set_str(key, val);
+}
+
+/* @yyc Load all remind slots from flash
+ * Returns number of slots loaded. Only overwrites slots with valid flash data.
+ */
+int common_config_load_remind_all(void *slots, int count)
+{
+    typedef struct { rt_uint8_t hour, minute; rt_int8_t enabled; char label[24]; } slot_t;
+    slot_t *out = (slot_t *)slots;
+    char buf[48];
+    int loaded = 0;
+
+    if (!s_inited || slots == RT_NULL || count <= 0)
+        return 0;
+
+    for (int i = 0; i < count && i < 8; i++)
+    {
+        char key[16];
+        rt_snprintf(key, sizeof(key), CFG_KEY_REMIND_FMT, i);
+        if (common_config_get_str(key, buf, sizeof(buf)) > 0 && buf[0] != '\0')
+        {
+            /* Parse "HH:MM,enabled,label" — sscanf-free for robustness */
+            const char *p = buf;
+            out[i].hour   = (rt_uint8_t)((p[0] - '0') * 10 + (p[1] - '0'));
+            out[i].minute = (rt_uint8_t)((p[3] - '0') * 10 + (p[4] - '0'));
+            p += 5;
+            if (*p == ',') p++;
+            out[i].enabled = (*p == '1') ? 1 : 0;
+            p++;
+            if (*p == ',') p++;
+            rt_strncpy(out[i].label, p, sizeof(out[i].label) - 1);
+            loaded++;
+        }
+    }
+    return loaded;
 }
 
 /* ── MSH debug command ──────────────────────────────────────────── */

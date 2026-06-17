@@ -1,22 +1,3 @@
-/*
- * cough_detect.c — Cough / Snore detection core logic
- *
- * Architecture (three threads):
- *
- *   ┌──────────────┐  audio frames   ┌─────────────────┐
- *   │  mic_thread  │ ──ring_buffer──► │ infer_thread    │
- *   │  (reader)    │                  │ (EI classifier) │
- *   └──────────────┘                  └────────┬────────┘
- *                                              │ CD_EVENT_COUGH
- *                                    ┌─────────▼────────┐
- *                                    │ control_thread   │
- *                                    │ (state machine)  │
- *                                    └──────────────────┘
- *
- * Stage 1: mic_thread + control_thread are functional.
- *          infer_thread calls the Edge Impulse stub (to be wired in Stage 2).
- */
-
 #include "cough_detect.h"
 #include <string.h>
 #include "cough_ui.h"
@@ -28,10 +9,22 @@
 #include "../common/common_led.h"
 #include "../common/common_env.h"
 #include "../common/common_storage.h"
+#include "../common/common_config.h"
+#include "../common/ota.h"
 
 #define DBG_TAG "cough"
 #define DBG_LVL DBG_INFO
 #include <rtdbg.h>
+
+/* @yyc Forward declarations: cloud upload helpers */
+static void cloud_upload_heartbeat(void);
+static void cloud_upload_environment(void);
+static void cloud_upload_cough_events_batch(void);
+static void cloud_upload_stats(void);
+void cloud_fetch_config(void);
+void cloud_check_ota(void);
+void cloud_fetch_reminders(void);   /* @yyc Fetch reminders from cloud */
+void cloud_upload_reminders(void);  /* @yyc Upload reminders to cloud */
 
 /* High-rate inference logs can flood UART; keep disabled by default. */
 #define CD_STREAM_LOG_ENABLE 0
@@ -39,15 +32,13 @@
 /* Periodic upload interval (10 minutes) */
 #define CD_UPLOAD_INTERVAL_MS   (10 * 60 * 1000)
 
-/* Minimum cough confidence score to trigger an event – kept in detect.h */
+/* Minimum cough confidence score to trigger an event - kept in detect.h */
 
 static volatile float s_cough_threshold = CD_COUGH_THRESHOLD;
 
-/* ─────────────────────────────────────────────────────────────────── */
-/*  Ring buffer: mic_thread writes, infer_thread reads                 */
-/* ─────────────────────────────────────────────────────────────────── */
+/* === Ring buffer: mic_thread writes, infer_thread reads === */
 /* Hold 3.5 seconds of audio for pre-trigger snapshot.
- * 560 frames × 160 samples = 89 600 samples ≈ 175 KB in SOCMEM.      */
+ * 560 frames ?? 160 samples = 89 600 samples ?? 175 KB in SOCMEM.      */
 #define RING_BUF_FRAMES     560                         /* ~3.5 s      */
 #define RING_BUF_SAMPLES    (RING_BUF_FRAMES * CD_FRAME_SAMPLES)
 
@@ -56,9 +47,7 @@ static uint32_t s_ring_wr  = 0;  /* write index (in samples)          */
 static uint32_t s_ring_rd  = 0;  /* read  index (in samples)          */
 static rt_mutex_t s_ring_mutex = RT_NULL;
 
-/* ─────────────────────────────────────────────────────────────────── */
-/*  Shared state                                                       */
-/* ─────────────────────────────────────────────────────────────────── */
+/* === Shared state === */
 static cd_state_t   s_state    = CD_STATE_IDLE;
 static float        s_baseline = 0.0f;
 static rt_event_t   s_event    = RT_NULL;
@@ -71,9 +60,7 @@ void cough_detect_send_event(rt_uint32_t event_set)
 static rt_device_t  s_mic_dev  = RT_NULL;
 static rt_tick_t    s_last_ui_tick = 0;
 
-/* ─────────────────────────────────────────────────────────────────── */
-/*  Helpers                                                            */
-/* ─────────────────────────────────────────────────────────────────── */
+/* === Helpers === */
 
 /** Compute mean energy (mean of squared samples) of a frame. */
 static float frame_energy(const int16_t *samples, uint32_t n)
@@ -105,24 +92,20 @@ static rt_uint16_t frame_peak_abs(const int16_t *samples, uint32_t n)
     return peak;
 }
 
-/* ─────────────────────────────────────────────────────────────────── */
-/*  Button ISR — toggle navigation bar only                            */
-/* ─────────────────────────────────────────────────────────────────── */
+/* === Button ISR - toggle navigation bar only === */
 static void button_irq_handler(void *args)
 {
     rt_base_t level = rt_pin_read(CD_BUTTON_PIN);
 
     if (level == PIN_LOW)
     {
-        /* Key pressed → toggle bottom navigation bar */
+        /* Key pressed - toggle bottom navigation bar */
         cough_ui_nav_toggle();
     }
     /* Ignore release edge */
 }
 
-/* ─────────────────────────────────────────────────────────────────── */
-/*  Mic thread — reads PDM frames and pushes to ring buffer            */
-/* ─────────────────────────────────────────────────────────────────── */
+/* === Mic thread - reads PDM frames and pushes to ring buffer === */
 static void mic_thread_entry(void *param)
 {
     int16_t frame[CD_FRAME_SAMPLES];
@@ -162,10 +145,8 @@ static void mic_thread_entry(void *param)
     }
 }
 
-/* ─────────────────────────────────────────────────────────────────── */
-/*  Inference thread — accumulates audio, runs feature extraction +    */
-/*  TFLite Micro classifier when energy gate is triggered.             */
-/* ─────────────────────────────────────────────────────────────────── */
+/* === Inference thread - accumulates audio, runs feature extraction + */
+/*   TFLite Micro classifier when energy gate is triggered. === */
 
 /* Buffer to accumulate audio for one inference window */
 static int16_t s_infer_buf[COUGH_INFER_WINDOW_SAMPLES] __attribute__((section(".cy_socmem_bss")));
@@ -180,7 +161,7 @@ static void infer_thread_entry(void *param)
     float    calib_sum = 0.0f;
     uint32_t calib_cnt = 0;
 
-    /* ── Auto-calibration at startup ────────────────────────────── */
+    /* [Auto-calibration] at startup */
     /*  Wait for mic to stabilise, then sample ambient noise for    */
     /*  ~3 s to compute a baseline.  Removes the need to press the  */
     /*  button before detection can start.                           */
@@ -192,7 +173,7 @@ static void infer_thread_entry(void *param)
     cough_ui_set_state_text("CALIBRATE");
 
     {
-        const uint32_t auto_cal_target = 300; /* 300 × 10 ms = 3 s */
+        const uint32_t auto_cal_target = 300; /* 300 ?? 10 ms = 3 s */
         calib_sum = 0.0f;
         calib_cnt = 0;
 
@@ -262,7 +243,7 @@ static void infer_thread_entry(void *param)
 
         cd_state_t cur = s_state;
 
-        /* ── Calibration: accumulate energy baseline ──────────────── */
+        /* [State] Calibration: accumulate energy baseline */
         if (cur == CD_STATE_CALIBRATE)
         {
             calib_sum += frame_energy(frame, CD_FRAME_SAMPLES);
@@ -276,7 +257,7 @@ static void infer_thread_entry(void *param)
                 calib_cnt = 0;
 
                 /* Auto-transition to LISTENING once calibration is done */
-                LOG_I("[STATE] → LISTENING  (baseline=%.1f, threshold=%.1f)",
+                LOG_I("[STATE] ?? LISTENING  (baseline=%.1f, threshold=%.1f)",
                       s_baseline, s_baseline * CD_SNR_FACTOR);
                 s_state = CD_STATE_LISTENING;
                 cough_ui_set_state_text("LISTEN");
@@ -284,12 +265,12 @@ static void infer_thread_entry(void *param)
             buf_pos = 0;
             energy_triggered = RT_FALSE;
         }
-        /* ── Listening: accumulate audio + run classifier ─────────── */
+        /* [State] Listening: accumulate audio + run classifier */
         else if (cur == CD_STATE_LISTENING)
         {
             float energy = frame_energy(frame, CD_FRAME_SAMPLES);
 
-            /* Soft energy log — informational only */
+            /* Soft energy log ?? informational only */
             if (s_baseline > 0.0f && energy > s_baseline * CD_SNR_FACTOR)
             {
                 if (!energy_triggered)
@@ -312,7 +293,7 @@ static void infer_thread_entry(void *param)
              * Trigger inference when no more complete frames fit.
              * COUGH_INFER_WINDOW_SAMPLES (10496) is NOT a multiple of
              * CD_FRAME_SAMPLES (160): 10496/160 = 65.6, so buf_pos
-             * maxes out at 65×160 = 10400.  We pad the remaining
+             * maxes out at 65??160 = 10400.  We pad the remaining
              * 96 samples with silence.
              */
             if (buf_pos + CD_FRAME_SAMPLES > COUGH_INFER_WINDOW_SAMPLES)
@@ -323,9 +304,9 @@ static void infer_thread_entry(void *param)
                     rt_memset(&s_infer_buf[buf_pos], 0,
                               (COUGH_INFER_WINDOW_SAMPLES - buf_pos) * sizeof(int16_t));
                 }
-                /* Always run inference — let the model decide noise vs cough.
+                /* Always run inference ?? let the model decide noise vs cough.
                  * Relying solely on an energy gate risks missing coughs that
-                 * straddle window boundaries or are quieter than 3× baseline. */
+                 * straddle window boundaries or are quieter than 3?? baseline. */
                 {
                     float scores[COUGH_INFER_NUM_CLASSES];
                     int ret = cough_infer_classify(s_infer_buf,
@@ -369,28 +350,23 @@ static void infer_thread_entry(void *param)
         }
         else
         {
-            /* Not calibrating or listening — reset accumulation */
+            /* Not calibrating or listening ?? reset accumulation */
             buf_pos = 0;
             energy_triggered = RT_FALSE;
         }
     }
 }
-
-/* ─────────────────────────────────────────────────────────────────── */
-/*  Periodic upload timer callback                                     */
-/* ─────────────────────────────────────────────────────────────────── */
+/* === Periodic upload timer callback === */
 static rt_timer_t s_upload_timer = RT_NULL;
 
 static void upload_timer_callback(void *parameter)
 {
     RT_UNUSED(parameter);
-    /* Only send event — heavy work done in control thread to avoid timer stack overflow */
+    /* Only send event - heavy work done in control thread to avoid timer stack overflow */
     rt_event_send(s_event, CD_EVENT_UPLOAD_TICK);
 }
 
-/* ─────────────────────────────────────────────────────────────────── */
-/*  Control thread — state machine                                     */
-/* ─────────────────────────────────────────────────────────────────── */
+/* === Control thread - state machine === */
 static void control_thread_entry(void *param)
 {
     rt_uint32_t recv = 0;
@@ -408,16 +384,16 @@ static void control_thread_entry(void *param)
                       RT_WAITING_FOREVER,
                       &recv);
 
-        /* ── Calibrate request (boot or Settings page) ────────────── */
+        /* [Event] Calibrate request (boot or Settings page) */
         if (recv & CD_EVENT_CALIBRATE)
         {
-            LOG_I("[STATE] → CALIBRATE  (sampling ambient noise for ~%d s)",
+            LOG_I("[STATE] ?? CALIBRATE  (sampling ambient noise for ~%d s)",
                   CD_CALIB_FRAMES * CD_FRAME_SAMPLES / CD_SAMPLE_RATE);
             s_state = CD_STATE_CALIBRATE;
             cough_ui_set_state_text("CALIBRATE");
         }
 
-        /* ── Cough detected → update stats/UI/LED (stay in LISTENING) */
+        /* [Event] Cough detected - update stats/UI/LED (stay in LISTENING) */
         if (recv & CD_EVENT_COUGH)
         {
             cough_ui_push_cough_event();
@@ -426,7 +402,7 @@ static void control_thread_entry(void *param)
             common_storage_log_event("COUGH detected");
         }
 
-        /* ── Snippet capture complete → flush to SD card ─────────── */
+        /* [Event] Snippet capture complete - flush to SD card */
         if (recv & CD_EVENT_SNIPPET_DONE)
         {
             int ret = cough_record_flush_to_sd();
@@ -443,32 +419,32 @@ static void control_thread_entry(void *param)
             }
         }
 
-        /* ── Periodic stats upload (from timer) ─────────────────── */
+        /* [Event] Periodic stats upload (from timer) */
         if (recv & CD_EVENT_UPLOAD_TICK)
         {
             if (common_network_is_ready())
             {
-                char json_buf[512];
-                cough_stat_to_json(json_buf, sizeof(json_buf));
-                int result = common_network_upload_json("/api/cough/stats", json_buf);
-                if (result == RT_EOK)
-                    LOG_I("Stats uploaded to cloud");
+                /* @yyc Cloud upload: heartbeat + env + events + stats */
+                cloud_upload_heartbeat();
+                cloud_upload_environment();
+                cloud_upload_cough_events_batch();
+                cloud_upload_stats();
             }
         }
 
-        /* ── Reminder alert (from timer) ──────────────────────────── */
+        /* [Timer] Reminder alert */
         if (recv & CD_EVENT_REMIND_FIRE)
         {
             cough_remind_do_alert();
         }
 
-        /* ── Midnight stats flush (from timer) ────────────────────── */
+        /* [Timer] Midnight stats flush */
         if (recv & CD_EVENT_STAT_FLUSH)
         {
             cough_stat_flush_to_storage();
         }
 
-        /* ── Periodic UI refresh (from timer) ─────────────────────── */
+        /* [Timer] Periodic UI refresh */
         if (recv & CD_EVENT_UI_REFRESH)
         {
             /* Perform deferred env sensor read (I2C + mdelay) here,
@@ -489,21 +465,211 @@ static void control_thread_entry(void *param)
             }
 
             /* Rotate old log files once per UI refresh (~1 s) is fine
-             * — the function is cheap when nothing needs deleting. */
+             * ?? the function is cheap when nothing needs deleting. */
             common_storage_log_rotate();
         }
 
-        /* ── NTP time sync (from WiFi ready event) ────────────────── */
+        /* [Event] NTP time sync (from WiFi ready event) */
         if (recv & CD_EVENT_NTP_SYNC)
         {
-            common_network_ntp_sync();
+            int ret = common_network_ntp_sync();
+            if (ret == RT_EOK)
+            {
+                /* @yyc After NTP sync: fetch cloud config, check OTA, sync reminders */
+                cloud_fetch_config();
+                cloud_check_ota();
+                cloud_fetch_reminders();   /* @yyc Fetch reminders from cloud */
+                cloud_upload_reminders();   /* @yyc Upload local reminders to cloud */
+            }
+            else
+            {
+                /* @yyc Fallback: apply default reminders when NTP sync fails */
+                cough_remind_apply_defaults();
+            }
         }
     }
 }
 
-/* ─────────────────────────────────────────────────────────────────── */
-/*  Public API                                                         */
-/* ─────────────────────────────────────────────────────────────────── */
+/* === Cloud Upload Helpers === */
+/* @yyc New: Cloud upload helper functions */
+
+/* Heartbeat: POST /api/v1/device-api/heartbeat */
+static void cloud_upload_heartbeat(void)
+{
+    char json_buf[256];
+    rt_snprintf(json_buf, sizeof(json_buf),
+        "{"
+        "\"device_sn\":\"%s\","
+        "\"firmware_version\":\"%s\""
+        "}",
+        common_config_get_device_id(),
+        ota_get_firmware_version());
+    int result = common_network_upload_json("/api/v1/device-api/heartbeat", json_buf);
+    if (result == RT_EOK)
+        LOG_I("Heartbeat uploaded");
+    else
+        LOG_W("Heartbeat upload failed: %d", result);
+}
+
+/* Environment: POST /api/v1/device-api/environment */
+static void cloud_upload_environment(void)
+{
+    const common_env_sample_t *env = common_env_get_cached();
+    if (env == RT_NULL || !env->valid)
+        return;
+
+    char json_buf[256];
+    rt_snprintf(json_buf, sizeof(json_buf),
+        "{"
+        "\"sample_time\":%lu,"
+        "\"temp\":%.1f,"
+        "\"hum\":%.1f,"
+        "\"valid\":true"
+        "}",
+        (unsigned long)time(RT_NULL),  /* @yyc ʹ�õ�ǰʱ�䣬env�ṹ����timestamp�ֶ� */
+        env->temperature_c,
+        env->humidity_pct);
+    int result = common_network_upload_json("/api/v1/device-api/environment", json_buf);
+    if (result == RT_EOK)
+        LOG_I("Environment uploaded");
+    else
+        LOG_W("Environment upload failed: %d", result);
+}
+
+/* Batch cough events: POST /api/v1/device-api/cough-events/batch */
+static void cloud_upload_cough_events_batch(void)
+{
+    int queue_size = cough_event_queue_size();
+    if (queue_size == 0)
+        return;
+
+    char json_buf[1024];
+    char events_json[768];
+
+    int events_len = cough_event_queue_to_json(events_json, sizeof(events_json), 16);
+    if (events_len <= 0)
+        return;
+
+    rt_snprintf(json_buf, sizeof(json_buf),
+        "{"
+        "\"upload_batch_id\":\"batch_%lu\","
+        "\"events\":%s"
+        "}",
+        (unsigned long)time(RT_NULL),
+        events_json);
+
+    int result = common_network_upload_json("/api/v1/device-api/cough-events/batch", json_buf);
+    if (result == RT_EOK)
+    {
+        LOG_I("Batch events uploaded (%d events)", queue_size > 16 ? 16 : queue_size);
+        /* Pop the events that were uploaded */
+        cough_event_t buf[16];
+        cough_event_queue_pop_batch(buf, 16);
+    }
+    else
+    {
+        LOG_W("Batch events upload failed: %d", result);
+    }
+}
+
+/* Stats summary: POST /api/cough/stats (existing) */
+static void cloud_upload_stats(void)
+{
+    char json_buf[512];
+    cough_stat_to_json(json_buf, sizeof(json_buf));
+    int result = common_network_upload_json("/api/cough/stats", json_buf);
+    if (result == RT_EOK)
+        LOG_I("Stats uploaded to cloud");
+    else
+        LOG_W("Stats upload failed: %d", result);
+}
+
+/* @yyc Fetch config: GET /api/v1/device-api/config */
+void cloud_fetch_config(void)
+{
+    char resp_buf[512];
+    int ret = common_network_get_json("/api/v1/device-api/config", resp_buf, sizeof(resp_buf));
+    if (ret > 0)
+    {
+        LOG_I("Device config fetched from cloud");
+        /* TODO: Parse and apply config if needed */
+    }
+    else
+    {
+        LOG_W("Config fetch failed: %d", ret);
+    }
+}
+
+/* @yyc OTA check: GET /api/v1/device-api/ota/check */
+void cloud_check_ota(void)
+{
+    ota_check_result_t result;
+    int ret = ota_check_for_update(&result);
+    if (ret == RT_EOK && result.has_update)
+    {
+        LOG_I("OTA available: %s (size=%u)", result.version, result.file_size);
+        /* TODO: Trigger OTA download and update if needed */
+    }
+    else if (ret == RT_EOK)
+    {
+        LOG_I("Firmware is up to date");
+    }
+    else
+    {
+        LOG_W("OTA check failed: %d", ret);
+    }
+}
+
+/* @yyc Fetch reminders from cloud - GET /api/v1/device-api/reminders */
+void cloud_fetch_reminders(void)
+{
+    char resp_buf[768];
+    int ret = common_network_get_json("/api/v1/device-api/reminders", resp_buf, sizeof(resp_buf));
+    if (ret > 0)
+    {
+        /* Parse and apply reminder config */
+        if (cough_remind_from_json(resp_buf) == RT_EOK)
+        {
+            LOG_I("Reminders fetched from cloud and applied");
+        }
+        else
+        {
+            LOG_W("Failed to parse reminder JSON, using defaults");
+            cough_remind_apply_defaults();
+        }
+    }
+    else
+    {
+        /* @yyc Fallback: use default reminders when cloud fetch fails */
+        LOG_W("Reminder fetch failed (%d), applying defaults", ret);
+        cough_remind_apply_defaults();
+    }
+}
+
+/* @yyc Upload reminders to cloud - POST /api/v1/device-api/reminders */
+void cloud_upload_reminders(void)
+{
+    char json_buf[1024];
+    int len = cough_remind_to_json(json_buf, sizeof(json_buf));
+    if (len <= 0)
+    {
+        LOG_W("Failed to serialize reminders");
+        return;
+    }
+
+    int result = common_network_upload_json("/api/v1/device-api/reminders", json_buf);
+    if (result == RT_EOK)
+    {
+        LOG_I("Reminders uploaded to cloud");
+    }
+    else
+    {
+        LOG_W("Reminder upload failed: %d", result);
+        /* @yyc No fallback needed - local reminders are preserved */
+    }
+}
+
+/* === Public API === */
 
 int cough_detect_init(void)
 {
@@ -552,13 +718,14 @@ int cough_detect_init(void)
     if (cough_infer_init() != 0)
     {
         LOG_E("Inference engine init failed!");
-        /* Continue anyway — mic + UI still work, inference just won't run */
+        /* Continue anyway ?? mic + UI still work, inference just won't run */
     }
 
     /* 5. Initialize statistics, recording, and reminder subsystems */
     cough_stat_init();
     cough_record_init();
     cough_remind_init();
+    ota_init();  /* @yyc ???OTA?? */
 
     /* 6. Start periodic stats upload timer */
     s_upload_timer = rt_timer_create("cd_upl", upload_timer_callback, RT_NULL,

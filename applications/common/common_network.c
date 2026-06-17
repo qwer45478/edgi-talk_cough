@@ -241,6 +241,90 @@ const common_network_t *common_network_get(void)
     return &s_network;
 }
 
+/* @yyc 新增：HTTP GET 请求 - 用于拉取云端配置和 OTA 检查 */
+int common_network_get_json(const char *path, char *resp_buf, rt_size_t buf_size)
+{
+#ifdef PKG_USING_WEBCLIENT
+    struct webclient_session *session = RT_NULL;
+    char url[256];
+    int result = -RT_ERROR;
+    int resp_status;
+    int content_length = 0;
+
+    if (path == RT_NULL || resp_buf == RT_NULL || buf_size == 0)
+    {
+        return -RT_EINVAL;
+    }
+
+    if (!s_network.is_ready)
+    {
+        LOG_W("Network not ready, cannot GET");
+        return -RT_EBUSY;
+    }
+
+    if (s_network.server_url[0] == '\0')
+    {
+        LOG_W("Server URL not configured");
+        return -RT_EINVAL;
+    }
+
+    /* Build full URL */
+    rt_snprintf(url, sizeof(url), "%s%s", s_network.server_url, path);
+
+    session = webclient_session_create(1024);
+    if (session == RT_NULL)
+    {
+        LOG_E("webclient session create failed");
+        return -RT_ENOMEM;
+    }
+
+    resp_status = webclient_get(session, url);
+    if (resp_status == 200)
+    {
+        content_length = webclient_content_length_get(session);
+        if (content_length > 0 && content_length < (int)buf_size)
+        {
+            int read_len = webclient_read(session, resp_buf, buf_size - 1);
+            if (read_len > 0)
+            {
+                resp_buf[read_len] = '\0';
+                LOG_I("GET OK: %s (len=%d)", path, read_len);
+                result = read_len;
+            }
+            else
+            {
+                LOG_W("GET read failed: %s", path);
+                result = -RT_ERROR;
+            }
+        }
+        else if (content_length >= (int)buf_size)
+        {
+            LOG_W("GET response too large: %d > buf_size %d", content_length, buf_size);
+            result = -RT_ENOMEM;
+        }
+        else
+        {
+            LOG_W("GET response empty: %s", path);
+            resp_buf[0] = '\0';
+            result = 0;
+        }
+    }
+    else
+    {
+        LOG_W("GET failed: %s (status=%d)", path, resp_status);
+        result = -RT_ERROR;
+    }
+
+    webclient_close(session);
+    return result;
+#else
+    RT_UNUSED(path);
+    RT_UNUSED(resp_buf);
+    RT_UNUSED(buf_size);
+    return -RT_ENOSYS;
+#endif
+}
+
 /* ── NTP time sync ────────────────────────────────────────────────── */  // @yyc edit: NTP增强：重试+定时校准
 static rt_bool_t s_ntp_synced = RT_FALSE;
 static int s_ntp_retry_count = 0;

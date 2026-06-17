@@ -46,6 +46,9 @@ int common_network_upload_file(const char *path, const char *file_path);
 
 const common_network_t *common_network_get(void);
 
+/* @yyc 新增：HTTP GET 请求 - 用于拉取云端配置和 OTA 检查 */
+int common_network_get_json(const char *path, char *resp_buf, rt_size_t buf_size);
+
 /**
  * Synchronize system time via NTP.
  * Blocking call - must be called from a thread context (not timer/ISR).

@@ -1,5 +1,5 @@
-/*
- * page_remind.c — Reminder management page
+﻿/*
+ * page_remind.c ? Reminder management page
  *
  * Layout: scrollable list of 8 reminder slots with add/edit/delete.
  * Edit popup uses roller for hour/minute, switch for enable, dropdown for label.
@@ -24,6 +24,9 @@ static lv_obj_t *s_edit_roller_m   = RT_NULL;
 static lv_obj_t *s_edit_switch     = RT_NULL;
 static lv_obj_t *s_edit_dropdown   = RT_NULL;
 static int       s_editing_slot    = -1;
+
+/* @yyc Alert popup widgets */
+static lv_obj_t *s_alert_popup     = RT_NULL;
 
 /* Preset label options */
 static const char *s_preset_labels[] = {
@@ -148,6 +151,9 @@ void page_remind_create(lv_obj_t *parent)
 
     /* Refresh all cards to show current slot data */
     page_remind_refresh();
+
+    /* @yyc Register callback for reminder alerts   show popup on screen */
+    cough_remind_register_callback(on_remind_fired, RT_NULL);
 }
 
 /* ── Refresh a single slot card ─────────────────────────────────── */
@@ -423,4 +429,86 @@ static void show_edit_popup(int slot_idx)
         lv_roller_set_selected(s_edit_roller_m, 0, LV_ANIM_OFF);
         lv_obj_add_state(s_edit_switch, LV_STATE_CHECKED);
     }
+}
+
+/* ── @yyc Alert popup ───────────────────────────────────────────── */ 
+static void alert_dismiss_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_alert_popup)
+    {
+        lv_obj_delete(s_alert_popup);
+        s_alert_popup = RT_NULL;
+    }
+}
+
+static void show_alert_popup(int slot_index, const cough_remind_slot_t *slot)
+{
+    if (slot == RT_NULL)
+        return;
+
+    /* Dismiss any existing alert */
+    if (s_alert_popup)
+    {
+        lv_obj_delete(s_alert_popup);
+        s_alert_popup = RT_NULL;
+    }
+
+    /* Create centered modal-style popup */
+    s_alert_popup = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(s_alert_popup, 420, 280);
+    lv_obj_center(s_alert_popup);
+    lv_obj_set_style_bg_color(s_alert_popup, lv_color_hex(CLR_BG_DARK), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_alert_popup, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(s_alert_popup, lv_color_hex(CLR_ACCENT_AMBER), LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_alert_popup, 3, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_alert_popup, 20, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_alert_popup, 24, LV_PART_MAIN);
+    lv_obj_clear_flag(s_alert_popup, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Bell icon + title */
+    lv_obj_t *lbl_icon = lv_label_create(s_alert_popup);
+    lv_label_set_text(lbl_icon, LV_SYMBOL_BELL " REMINDER");
+    lv_obj_set_style_text_color(lbl_icon, lv_color_hex(CLR_ACCENT_AMBER), LV_PART_MAIN);
+    lv_obj_set_style_text_font(lbl_icon, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_align(lbl_icon, LV_ALIGN_TOP_MID, 0, 0);
+
+    /* Time display */
+    lv_obj_t *lbl_time = lv_label_create(s_alert_popup);
+    lv_label_set_text_fmt(lbl_time, "%02d:%02d",
+            (int)slot->hour, (int)slot->minute);
+    lv_obj_set_style_text_color(lbl_time, lv_color_hex(CLR_TEXT_WHITE), LV_PART_MAIN);
+    lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_align(lbl_time, LV_ALIGN_TOP_MID, 0, 40);
+
+    /* Label */
+    lv_obj_t *lbl_remind = lv_label_create(s_alert_popup);
+    if (slot->label[0] != '\0')
+        lv_label_set_text_fmt(lbl_remind, "%s", slot->label);
+    else
+        lv_label_set_text(lbl_remind, "Medication Time");
+    lv_obj_set_style_text_color(lbl_remind, lv_color_hex(CLR_TEXT_MUTED), LV_PART_MAIN);
+    lv_obj_set_style_text_font(lbl_remind, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_align(lbl_remind, LV_ALIGN_TOP_MID, 0, 80);
+
+    /* Dismiss button */
+    lv_obj_t *btn = lv_button_create(s_alert_popup);
+    lv_obj_set_size(btn, 120, 48);
+    lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(CLR_ACCENT_AMBER), LV_PART_MAIN);
+    lv_obj_set_style_radius(btn, 12, LV_PART_MAIN);
+
+    lv_obj_t *lbl_btn = lv_label_create(btn);
+    lv_label_set_text(lbl_btn, "Got it!");
+    lv_obj_set_style_text_color(lbl_btn, lv_color_hex(CLR_BG_DARK), LV_PART_MAIN);
+    lv_obj_set_style_text_font(lbl_btn, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_center(lbl_btn);
+    lv_obj_add_event_cb(btn, alert_dismiss_cb, LV_EVENT_CLICKED, RT_NULL);
+}
+
+/* @yyc Remind callback ? invoked from cough_remind_do_alert() */
+static void on_remind_fired(int slot_index, const cough_remind_slot_t *slot, void *user_data)
+{
+    RT_UNUSED(user_data);
+    show_alert_popup(slot_index, slot);
 }

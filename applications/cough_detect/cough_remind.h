@@ -1,5 +1,5 @@
 /*
- * cough_remind.h â€” Medication and observation reminder system
+ * cough_remind.h ¡ª Medication and observation reminder system
  *
  * Supports up to 8 daily reminder slots with configurable times.
  * Uses RTC for scheduling and speaker for audio alerts.
@@ -71,6 +71,35 @@ void cough_remind_reset_daily(void);
  * Called from a worker thread context, NOT from timer interrupt.
  */
 void cough_remind_do_alert(void);
+
+/**
+ * @brief Sync reminders with cloud.
+ * @param json_buf JSON buffer to store reminder data
+ * @param buf_size Size of JSON buffer
+ * @return Number of bytes written, or <= 0 on error
+ * @note JSON format: {"slots": [{"slot_index":0,"hour":8,"minute":0,"enabled":true,"label":"Morning"}]}
+ */
+int cough_remind_to_json(char *json_buf, rt_size_t buf_size);
+
+/**
+ * @brief Apply reminder configuration from JSON.
+ * @param json JSON string containing reminder data
+ * @return RT_EOK on success, error code on failure
+ * @note If cloud fetch fails, use cough_remind_apply_defaults() to restore defaults
+ */
+int cough_remind_from_json(const char *json);
+
+/**
+ * @brief Restore default reminder configuration (fallback).
+ * @note Called when cloud fetch fails or at first boot
+ */
+void cough_remind_apply_defaults(void);
+
+/**
+ * @brief Get pointer to internal slots array for reading.
+ * @return Pointer to internal slot array (read-only)
+ */
+const cough_remind_slot_t *cough_remind_get_all_slots(void);
 
 #ifdef __cplusplus
 }
