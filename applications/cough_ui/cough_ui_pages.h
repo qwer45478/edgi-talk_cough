@@ -1,5 +1,5 @@
 /*
- * cough_ui_pages.h — Internal header shared between UI page modules
+ * cough_ui_pages.h � Internal header shared between UI page modules
  */
 #ifndef COUGH_UI_PAGES_H
 #define COUGH_UI_PAGES_H
@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-/* ── Display dimensions ────────────────────────────────────────── */
+/* ?? Display dimensions ?????????????????????????????????????????? */
 #define SCREEN_W  512
 #define SCREEN_H  800
 #define SAFE_R    34        /* right bezel inset                     */
@@ -21,7 +21,7 @@ extern "C" {
 #define NAVBAR_H  60
 #define PAGE_H    (SCREEN_H - HEADER_H)      /* 744 content height  */
 
-/* ── Color palette ──────────────────────────────────────────────── */
+/* ?? Color palette ???????????????????????????????????????????????? */
 #define CLR_BG_DARK         0x1A1A2E
 #define CLR_PANEL_BG        0x16213E
 #define CLR_PANEL_BORDER    0x2A2A4A
@@ -37,24 +37,25 @@ extern "C" {
 #define CLR_CHART_BG        0x0f172a
 #define CLR_THRESHOLD       0xf87171
 
-/* ── Chart parameters ───────────────────────────────────────────── */
+/* ?? Chart parameters ????????????????????????????????????????????? */
 #define CHART_POINT_COUNT    100
 #define LEVEL_MAX            20000
 #define COUGH_THRESHOLD      10000
 #define COUGH_WINDOW_POINTS  13
 
-/* ── Shared helper functions (implemented in cough_ui.c) ────────── */
+/* ?? Shared helper functions (implemented in cough_ui.c) ?????????? */
 lv_obj_t *ui_create_card(lv_obj_t *parent, lv_coord_t w, lv_coord_t h);
 lv_obj_t *ui_create_section_label(lv_obj_t *parent, const char *text);
 
-/* ── Page builders ──────────────────────────────────────────────── */
+/* ?? Page builders ???????????????????????????????????????????????? */
 void page_home_create(lv_obj_t *parent);
 void page_stats_create(lv_obj_t *parent);
 void page_remind_create(lv_obj_t *parent);
 void page_settings_create(lv_obj_t *parent);
 void page_about_create(lv_obj_t *parent);
+void page_xiaozhi_create(lv_obj_t *parent);  /* @yyc add */
 
-/* ── Page update handlers (called from message loop) ────────────── */
+/* ?? Page update handlers (called from message loop) ?????????????? */
 void page_home_set_state(const char *text);
 void page_home_push_level(rt_uint16_t level);
 void page_home_push_cough(void);

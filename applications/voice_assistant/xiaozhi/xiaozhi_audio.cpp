@@ -15,6 +15,9 @@
 #include "lwip/tcpip.h"
 #include "xiaozhi.h"
 
+/* @yyc add: include common audio capture for resource arbitration */
+#include "../../common/common_audio_capture.h"
+
 /* Device name configurations */
 #ifndef BSP_XIAOZHI_SOUND_DEVICE_NAME
 #define BSP_XIAOZHI_SOUND_DEVICE_NAME "sound0"
@@ -94,6 +97,13 @@ void xz_mic_open(xz_audio_t *thiz)
 {
     if (!thiz->is_rx_enable)
     {
+        /* @yyc add: request exclusive access to audio capture */
+        if (common_audio_capture_request_exclusive(AUDIO_USER_VOICE_ASSISTANT) != RT_EOK)
+        {
+            LOG_E("Audio: Failed to request exclusive audio capture");
+            return;
+        }
+
         if (rt_device_open(thiz->rt_mic_dev, RT_DEVICE_OFLAG_RDONLY) == RT_EOK)
         {
             rt_event_send(mic_event, MIC_EVENT_OPEN);
@@ -102,7 +112,9 @@ void xz_mic_open(xz_audio_t *thiz)
         }
         else
         {
+            /* @yyc add: release on failure */
             LOG_E("Audio: Failed to open microphone device");
+            common_audio_capture_release_exclusive(AUDIO_USER_VOICE_ASSISTANT);
         }
     }
     else
@@ -117,6 +129,8 @@ void xz_mic_close(xz_audio_t *thiz)
     {
         rt_event_send(mic_event, MIC_EVENT_CLOSE);
         rt_device_close(thiz->rt_mic_dev);
+        /* @yyc add: release exclusive access to audio capture */
+        common_audio_capture_release_exclusive(AUDIO_USER_VOICE_ASSISTANT);
         LOG_I("Audio: Microphone closed");
         thiz->is_rx_enable = 0;
     }

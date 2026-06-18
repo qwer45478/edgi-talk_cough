@@ -207,3 +207,8 @@ int common_audio_capture_get_exclusive_owner(void)
 
     return owner;
 }
+
+rt_bool_t common_audio_capture_is_voice_assistant_active(void)
+{
+    return common_audio_capture_get_exclusive_owner() == AUDIO_USER_VOICE_ASSISTANT;
+}

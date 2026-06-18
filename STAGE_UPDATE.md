@@ -2,7 +2,7 @@
 
 ## 更新日期
 
-2026-06-16
+2026-06-18
 
 ## 一、WiFi 动态配网功能（AP 模式）
 
@@ -426,87 +426,126 @@ cloud_upload_reminders()  ← POST /api/v1/device-api/reminders (上传本地提醒)
 
 ### 12.1 功能描述
 
-集成"小智"AI语音助手，实现儿童咳嗽检测设备与AI语音交互功能的融合。核心解决咳嗽检测与语音助手共用同一麦克风带来的资源冲突问题。
+集成官方"小智"AI语音助手到儿童咳嗽检测开发板。核心解决咳嗽检测与语音助手共用同一麦克风带来的资源冲突问题。采用官方小智SDK，设备绑定通过小智官网完成。
 
 ### 12.2 新增/修改文件
 
 #### 开发板端 (edgi-talk_cough)
 
-| 文件                                              | 类型 | 说明                                               |
-| ------------------------------------------------- | ---- | -------------------------------------------------- |
-| `applications/voice_assistant/voice_state.h`      | 新增 | 状态机头文件                                       |
-| `applications/voice_assistant/voice_state.c`      | 新增 | 状态机实现（状态转换、超时处理）                   |
-| `applications/voice_assistant/voice_assistant.h`  | 新增 | 语音助手主模块头文件                               |
-| `applications/voice_assistant/voice_assistant.c`  | 新增 | 语音助手主模块实现（stub）                         |
-| `applications/voice_assistant/audio_classifier.h` | 新增 | 音频分类器头文件                                   |
-| `applications/voice_assistant/audio_classifier.c` | 新增 | 音频分类器实现（VAD算法）                          |
-| `applications/voice_assistant/SConscript`         | 新增 | 编译配置                                           |
-| `applications/common/common_audio_capture.h`      | 修改 | 新增资源仲裁API                                    |
-| `applications/common/common_audio_capture.c`      | 修改 | 实现资源仲裁逻辑                                   |
-| `applications/common/common_led.h`                | 修改 | 新增LED模式（LISTENING/PROCESSING/PLAYING/NORMAL） |
-| `applications/cough_detect/cough_detect.c`        | 修改 | 集成voice_is_active()检查                          |
-| `applications/main.c`                             | 修改 | 初始化语音助手模块                                 |
+| 文件                                                     | 类型 | 说明                                         |
+| -------------------------------------------------------- | ---- | -------------------------------------------- |
+| `applications/voice_assistant/voice_assistant.h`         | 新增 | 语音助手模块头文件                           |
+| `applications/voice_assistant/voice_assistant.c`         | 新增 | 语音助手模块实现（调用SDK）                  |
+| `applications/voice_assistant/xiaozhi/`                  | 新增 | 官方小智SDK（完整复制）                      |
+| `applications/voice_assistant/xiaozhi/xiaozhi.cpp`       | 新增 | 小智主逻辑（状态机、WebSocket通信）          |
+| `applications/voice_assistant/xiaozhi/xiaozhi.h`         | 新增 | 头文件及宏定义                               |
+| `applications/voice_assistant/xiaozhi/xiaozhi_audio.cpp` | 新增 | 音频采集/播放（已集成资源仲裁）              |
+| `applications/voice_assistant/xiaozhi/xiaozhi_ui.c`      | 新增 | UI界面（状态/输出/Emoji显示）                |
+| `applications/voice_assistant/xiaozhi/xiaozhi_ui.h`      | 新增 | UI头文件                                     |
+| `applications/voice_assistant/xiaozhi/wake_word/`        | 新增 | 唤醒词检测（Edge Impulse SDK）               |
+| `applications/voice_assistant/xiaozhi/iot/`              | 新增 | IoT设备管理                                  |
+| `applications/voice_assistant/xiaozhi/mcp/`              | 新增 | MCP协议实现                                  |
+| `applications/voice_assistant/xiaozhi/ui/3d_demo/`       | 新增 | 3D动画UI资源                                 |
+| `applications/voice_assistant/SConscript`                | 新增 | 编译配置（容器）                             |
+| `applications/voice_assistant/xiaozhi/SConscript`        | 新增 | 编译配置（核心）                             |
+| `applications/voice_assistant/xiaozhi/*/SConscript`      | 新增 | 各子模块编译配置                             |
+| `applications/cough_ui/page_xiaozhi.c`                   | 新增 | 小智助手页面封装                             |
+| `applications/cough_ui/page_xiaozhi.h`                   | 新增 | 小智助手页面头文件                           |
+| `applications/common/common_audio_capture.h`             | 修改 | 新增资源仲裁API（request_exclusive/release） |
+| `applications/common/common_audio_capture.c`             | 修改 | 实现资源仲裁逻辑                             |
+| `applications/cough_detect/cough_detect.c`               | 修改 | 集成资源仲裁（请求独占→读取→释放）           |
+| `applications/main.c`                                    | 修改 | 初始化语音助手模块                           |
 
 #### 云端 (edgi-talk-cough-cloud)
 
-| 文件                                                  | 类型 | 说明            |
-| ----------------------------------------------------- | ---- | --------------- |
-| `cloud_backend/app/api/v1/endpoints/voice_command.py` | 新增 | 语音命令处理API |
-| `cloud_backend/app/api/v1/endpoints/voice_tts.py`     | 新增 | 文本转语音API   |
-| `cloud_backend/app/api/v1/api.py`                     | 修改 | 注册语音API路由 |
+| 文件 | 类型 | 说明                                               |
+| ---- | ---- | -------------------------------------------------- |
+| 无   | -    | 使用小智官方云端（api.tenclass.net），无需云端改造 |
 
-### 12.3 状态机设计
+### 12.3 小智SDK状态机
+
+使用官方定义的状态机：
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │           VOICE_STATE_IDLE             │
-                    │   咳嗽检测运行 ?  语音助手停止          │
-                    └───────────────┬─────────────────────────┘
-                                    │ 用户触发"小智"
-                                    ▼
-                    ┌─────────────────────────────────────────┐
-                    │         VOICE_STATE_LISTENING           │
-                    │   咳嗽检测暂停 ?  语音助手录音          │
-                    └───────────────┬─────────────────────────┘
-                                    │ 录音结束/超时
-                                    ▼
-                    ┌─────────────────────────────────────────┐
-                    │         VOICE_STATE_PROCESSING          │
-                    │   咳嗽检测暂停 ?  等待云端AI响应        │
-                    └───────────────┬─────────────────────────┘
-                                    │ 收到TTS音频
-                                    ▼
-                    ┌─────────────────────────────────────────┐
-                    │          VOICE_STATE_PLAYING            │
-                    │   咳嗽检测暂停 ?  播放TTS音频          │
-                    └───────────────┬─────────────────────────┘
-                                    │ 播放结束
-                                    ▼
-                          (回到 IDLE)
+kDeviceStateUnknown → kDeviceStateStarting → kDeviceStateIdle
+                                                    ↓
+                              ┌─────────────────────┼─────────────────────┐
+                              ↓                     ↓                     ↓
+                   kDeviceStateListening    kDeviceStateSpeaking    kDeviceStateActivating
+                   （用户说话中）           （AI回复中）             （等待绑定）
 ```
 
 ### 12.4 音频资源仲裁机制
 
-通过 `common_audio_capture_request_exclusive()` 和 `common_audio_capture_release_exclusive()` 实现：
+通过互斥锁实现咳嗽检测与语音助手的麦克风共享：
 
-- 咳嗽检测和语音助手不能同时使用麦克风
-- 语音助手活跃时，咳嗽检测线程主动让出麦克风
-- 状态切换时自动协调资源归属
+```c
+// 咳嗽检测线程（低优先级）
+while (1) {
+    common_audio_capture_request_exclusive(AUDIO_USER_COUGH_DETECT);
+    // 读取音频帧...
+    common_audio_capture_release_exclusive(AUDIO_USER_COUGH_DETECT);
+}
 
-### 12.5 云端API
+// 语音助手（高优先级）
+void xz_mic_open() {
+    common_audio_capture_request_exclusive(AUDIO_USER_VOICE_ASSISTANT);
+    rt_device_open(mic_dev, RDONLY);
+}
+void xz_mic_close() {
+    rt_device_close(mic_dev);
+    common_audio_capture_release_exclusive(AUDIO_USER_VOICE_ASSISTANT);
+}
+```
 
-| 接口                          | 方法 | 功能                     |
-| ----------------------------- | ---- | ------------------------ |
-| `/api/v1/voice/voice/command` | POST | 接收语音，返回AI响应+TTS |
-| `/api/v1/voice/voice/status`  | GET  | 查询语音服务状态         |
-| `/api/v1/voice/voice/tts`     | POST | 文本转语音               |
+**特点**：
 
-### 12.6 注意事项
+- 咳嗽检测每次读取后立即释放麦克风
+- 语音助手需要时能快速获取独占权
+- 资源仲裁对双方透明
 
-- 当前为 **stub实现**，实际ASR/TTS/AI对话逻辑待集成
-- 需要后续对接具体AI服务（如百度ASR、腾讯TTS等）
-- 开发板端需要在咳嗽检测运行时按压按钮或通过其他方式触发语音助手
+### 12.5 设备绑定流程
+
+```
+1. 开发板WiFi连接成功
+2. 按一下顶部按键 → 触发WebSocket连接小智云端
+3. 云端返回session_id → 屏幕显示验证码
+4. 用户访问 https://xiaozhi.me/ → 输入验证码绑定设备
+5. 绑定成功，后续正常使用
+```
+
+### 12.6 触发方式
+
+- **物理按键**：按开发板顶部按键（GET_PIN(8,3)）触发聆听
+- **唤醒词**（可选）：说出"小智小智"唤醒（需SDK支持）
+
+### 12.7 麦克风使用策略
+
+| 使用者   | 优先级 | 说明                 |
+| -------- | ------ | -------------------- |
+| 咳嗽检测 | 低     | 几乎100%时间运行     |
+| 语音助手 | 高     | 按键触发，使用时独占 |
+
+### 12.8 注意事项
+
 - 所有新增/修改代码均标记 `// @yyc` 便于追溯
+- WiFi配网使用项目已有的AP模式配网页面
+- 设备绑定通过小智官网完成，无需云端改造
+- 小智SDK的WebSocket连接、ASR、TTS、对话逻辑均使用官方服务
+
+### 12.9 初始化流程
+
+```c
+// main.c
+voice_assistant_init()
+├── common_audio_capture_init()    // 资源仲裁初始化
+├── xiaozhi_ui_init()             // 小智UI初始化
+└── ws_xiaozhi_init()             // 小智主线程启动
+                                    ├── WiFi连接
+                                    ├── WebSocket连接
+                                    ├── 按键初始化
+                                    └── 状态机运行
+```
 
 ---
 

@@ -74,4 +74,12 @@ rt_bool_t common_audio_capture_is_available(audio_user_t user);
  */
 int common_audio_capture_get_exclusive_owner(void);
 
+/**
+ * @brief 检查语音助手是否正在使用麦克风（供咳嗽检测调用）
+ * @return RT_TRUE: 语音助手正在使用, RT_FALSE: 未使用
+ *
+ * 注意：这是一个简单的检查，基于独占模式标志
+ */
+rt_bool_t common_audio_capture_is_voice_assistant_active(void);
+
 #endif /* COMMON_AUDIO_CAPTURE_H */

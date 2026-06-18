@@ -94,18 +94,19 @@ static rt_uint16_t frame_peak_abs(const int16_t *samples, uint32_t n)
     return peak;
 }
 
-/* === Button ISR - toggle navigation bar only === */
-static void button_irq_handler(void *args)
-{
-    rt_base_t level = rt_pin_read(CD_BUTTON_PIN);
-
-    if (level == PIN_LOW)
-    {
-        /* Key pressed - toggle bottom navigation bar */
-        cough_ui_nav_toggle();
-    }
-    /* Ignore release edge */
-}
+/* === Button ISR - disabled, reserved for xiaozhi SDK === */
+// @yyc disabled: button is now used by xiaozhi SDK for voice assistant
+// static void button_irq_handler(void *args)
+// {
+//     rt_base_t level = rt_pin_read(CD_BUTTON_PIN);
+//
+//     if (level == PIN_LOW)
+//     {
+//         /* Key pressed - toggle bottom navigation bar */
+//         cough_ui_nav_toggle();
+//     }
+//     /* Ignore release edge */
+// }
 
 /* === Mic thread - reads PDM frames and pushes to ring buffer === */
 static void mic_thread_entry(void *param)
@@ -114,17 +115,45 @@ static void mic_thread_entry(void *param)
 
     while (1)
     {
-        /* @yyc add: 如果语音助手活跃，跳过本次采集
-         * 这样可以避免与语音助手争夺麦克风资源 */
-        // TODO: @yyc Will be re-enabled after xiaozhi SDK integration
-        // if (voice_is_active())
-        // {
-        //     rt_thread_mdelay(50);
-        //     continue;
-        // }
+        /* @yyc add: 请求独占使用麦克风（语音助手优先）
+         * 我们只在需要读取时才请求，完成后立即释放
+         * 这样语音助手可以在间隙中获取麦克风 */
+        if (common_audio_capture_request_exclusive(AUDIO_USER_COUGH_DETECT) != RT_EOK)
+        {
+            /* 获取不到，语音助手正在使用，等待后重试 */
+            rt_thread_mdelay(10);
+            continue;
+        }
+
+        /* 确保设备已打开（首次需要打开） */
+        if (s_mic_dev != RT_NULL)
+        {
+            /* 配置音频参数 */
+            struct rt_audio_caps mic_cfg;
+            mic_cfg.main_type      = AUDIO_TYPE_MIXER;
+            mic_cfg.sub_type       = AUDIO_MIXER_VOLUME;
+            mic_cfg.udata.value    = 30;
+            rt_device_control(s_mic_dev, AUDIO_CTL_CONFIGURE, &mic_cfg);
+
+            if (rt_device_open(s_mic_dev, RT_DEVICE_OFLAG_RDONLY) != RT_EOK)
+            {
+                /* 设备可能被语音助手占用，重试 */
+                common_audio_capture_release_exclusive(AUDIO_USER_COUGH_DETECT);
+                rt_thread_mdelay(10);
+                continue;
+            }
+        }
 
         /* Block until one frame is available from the PDM driver */
         rt_size_t bytes = rt_device_read(s_mic_dev, 0, frame, CD_FRAME_BYTES);
+
+        /* @yyc add: 关闭设备并释放独占，让语音助手有机会获取 */
+        if (s_mic_dev != RT_NULL)
+        {
+            rt_device_close(s_mic_dev);
+        }
+        common_audio_capture_release_exclusive(AUDIO_USER_COUGH_DETECT);
+
         if (bytes != CD_FRAME_BYTES)
         {
             rt_thread_mdelay(1);
@@ -700,33 +729,23 @@ int cough_detect_init(void)
     s_ring_mutex = rt_mutex_create("cd_rbuf", RT_IPC_FLAG_FIFO);
     RT_ASSERT(s_ring_mutex != RT_NULL);
 
-    /* 2. Open microphone device */
+    /* 2. Find microphone device (open/close handled in mic_thread_entry) */
     s_mic_dev = rt_device_find(CD_MIC_DEVICE_NAME);
     if (s_mic_dev == RT_NULL)
     {
         LOG_E("Microphone device '%s' not found!", CD_MIC_DEVICE_NAME);
         return -1;
     }
+    // @yyc note: device open/close is now handled in mic_thread_entry with exclusive access
+    LOG_I("Microphone device '%s' found (open/close managed in thread)", CD_MIC_DEVICE_NAME);
 
-    struct rt_audio_caps mic_cfg;
-    mic_cfg.main_type      = AUDIO_TYPE_MIXER;
-    mic_cfg.sub_type       = AUDIO_MIXER_VOLUME;
-    mic_cfg.udata.value    = 30;
-    rt_device_control(s_mic_dev, AUDIO_CTL_CONFIGURE, &mic_cfg);
-
-    if (rt_device_open(s_mic_dev, RT_DEVICE_OFLAG_RDONLY) != RT_EOK)
-    {
-        LOG_E("Failed to open microphone device!");
-        return -2;
-    }
-    LOG_I("Microphone '%s' opened OK", CD_MIC_DEVICE_NAME);
-
-    /* 3. Configure button pin (interrupt on both edges) */
-    rt_pin_mode(CD_BUTTON_PIN, PIN_MODE_INPUT_PULLUP);
-    rt_pin_attach_irq(CD_BUTTON_PIN, PIN_IRQ_MODE_RISING_FALLING,
-                      button_irq_handler, RT_NULL);
-    rt_pin_irq_enable(CD_BUTTON_PIN, PIN_IRQ_ENABLE);
-    LOG_I("Button pin configured (GET_PIN(8,3))");
+    /* 3. Configure button pin (interrupt on both edges) - disabled for xiaozhi SDK */
+    // @yyc disabled: button is now used by xiaozhi SDK
+    // rt_pin_mode(CD_BUTTON_PIN, PIN_MODE_INPUT_PULLUP);
+    // rt_pin_attach_irq(CD_BUTTON_PIN, PIN_IRQ_MODE_RISING_FALLING,
+    //                   button_irq_handler, RT_NULL);
+    // rt_pin_irq_enable(CD_BUTTON_PIN, RT_IRQ_ENABLE);
+    // LOG_I("Button pin configured (GET_PIN(8,3))");
 
     /* Auto-calibrate: enter calibration state immediately on boot */
     s_state = CD_STATE_CALIBRATE;

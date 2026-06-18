@@ -6,9 +6,7 @@ cwd     = GetCurrentDir()
 # Add all subdirectories to include path
 path = []
 path += [cwd]
-path += [cwd + '/ui', cwd + '/webnet', cwd + '/iot', cwd + '/mcp']
-# Add edge-impulse directory for wake word detection
-path += [cwd + '/../../edge-impulse']
+path += [cwd + '/ui', cwd + '/iot', cwd + '/mcp', cwd + '/wake_word']
 
 src = Glob('*.c') + Glob('*.cpp')
 
