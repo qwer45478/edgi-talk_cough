@@ -146,6 +146,7 @@ CURRENT TIME
 ```
 
 ### 4.5 前提条件
+
 系统时间通过 NTP 同步成功后才能显示正确时间。
 
 ---
@@ -153,27 +154,31 @@ CURRENT TIME
 ## 六、环境传感器增强
 
 ### 6.1 功能描述
+
 在首页环境卡片中添加舒适度状态提示，帮助用户判断当前环境是否适合儿童。
 
 ### 6.2 修改文件
-| 文件 | 操作 | 说明 |
-|------|------|------|
+
+| 文件                                | 操作 | 说明                     |
+| ----------------------------------- | ---- | ------------------------ |
 | `applications/cough_ui/page_home.c` | 修改 | 添加舒适度判断函数和显示 |
 
 ### 6.3 舒适度判断规则
-| 状态 | 温度条件 | 湿度条件 |
-|------|----------|----------|
-| OK | 18-28°C | 30-70%RH |
-| Cool | <18°C | 30-70%RH |
-| Warm | >28°C | 30-70%RH |
-| Dry | 18-28°C | <30%RH |
-| Humid | 18-28°C | >70%RH |
-| Cold+Dry | <18°C | <30%RH |
-| Cold+Wet | <18°C | >70%RH |
-| Hot+Dry | >28°C | <30%RH |
-| Hot+Wet | >28°C | >70%RH |
+
+| 状态     | 温度条件 | 湿度条件 |
+| -------- | -------- | -------- |
+| OK       | 18-28°C  | 30-70%RH |
+| Cool     | <18°C    | 30-70%RH |
+| Warm     | >28°C    | 30-70%RH |
+| Dry      | 18-28°C  | <30%RH   |
+| Humid    | 18-28°C  | >70%RH   |
+| Cold+Dry | <18°C    | <30%RH   |
+| Cold+Wet | <18°C    | >70%RH   |
+| Hot+Dry  | >28°C    | <30%RH   |
+| Hot+Wet  | >28°C    | >70%RH   |
 
 ### 6.4 显示格式
+
 ```
 25.5 °C
 60.0 %RH
@@ -185,18 +190,21 @@ OK
 ## 七、咳嗽事件日志
 
 ### 7.1 功能描述
+
 记录每次咳嗽事件的时间戳和白天/夜晚标志，方便家长回顾和分析。
 
 ### 7.2 修改文件
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `applications/common/common_cough_log.h` | 新建 | 头文件 |
-| `applications/common/common_cough_log.c` | 新建 | 实现文件 |
-| `applications/common/app_common.h` | 修改 | 添加初始化标志 |
-| `applications/common/app_common.c` | 修改 | 添加初始化调用 |
-| `applications/cough_ui/page_home.c` | 修改 | 每次检测到咳嗽时记录 |
+
+| 文件                                     | 操作 | 说明                 |
+| ---------------------------------------- | ---- | -------------------- |
+| `applications/common/common_cough_log.h` | 新建 | 头文件               |
+| `applications/common/common_cough_log.c` | 新建 | 实现文件             |
+| `applications/common/app_common.h`       | 修改 | 添加初始化标志       |
+| `applications/common/app_common.c`       | 修改 | 添加初始化调用       |
+| `applications/cough_ui/page_home.c`      | 修改 | 每次检测到咳嗽时记录 |
 
 ### 7.3 数据结构
+
 ```c
 typedef struct
 {
@@ -206,14 +214,16 @@ typedef struct
 ```
 
 ### 7.4 存储策略
-| 项目 | 说明 |
-|------|------|
+
+| 项目     | 说明           |
+| -------- | -------------- |
 | 存储方式 | 内存循环缓冲区 |
-| 最大条目 | 100 条 |
+| 最大条目 | 100 条         |
 | 线程安全 | 使用互斥锁保护 |
-| 白天定义 | 6:00 - 18:00 |
+| 白天定义 | 6:00 - 18:00   |
 
 ### 7.5 API 接口
+
 ```c
 void common_cough_log_init(void);          /* 初始化 */
 void common_cough_log_add(rt_bool_t is_day);  /* 添加记录 */
@@ -226,23 +236,26 @@ int common_cough_log_get_recent(...);      /* 获取最近记录 */
 ## 八、云端数据上传接口对接
 
 ### 8.1 功能描述
+
 修改咳嗽统计数据 JSON 输出格式，添加 `device_id` 和 `ts` 字段以匹配云端 `/api/cough/stats` 接口，实现开发板与云端的互联互通。
 
 ### 8.2 修改/新增文件
 
-| 文件 | 类型 | 说明 |
-|------|------|------|
+| 文件                                     | 类型 | 说明                                        |
+| ---------------------------------------- | ---- | ------------------------------------------- |
 | `applications/cough_detect/cough_stat.c` | 修改 | `cough_stat_to_json()` 添加 device_id 和 ts |
-| `applications/common/common_config.c` | 修改 | 默认 server_url 设为云端局域网地址 |
+| `applications/common/common_config.c`    | 修改 | 默认 server_url 设为云端局域网地址          |
 
 ### 8.3 JSON 格式变化
 
 **修改前：**
+
 ```json
 {"date":20260617,"total":12,"day":8,"night":4,"bursts":2,"temp":26.5,"hum":58.2,"last_ts":1750200000,"hourly":[...]}
 ```
 
 **修改后：**
+
 ```json
 {"device_id":"a1b2c3d4e5f6","ts":1750201234,"date":20260617,"total":12,"day":8,"night":4,"bursts":2,"temp":26.5,"hum":58.2,"last_ts":1750200000,"hourly":[...]}
 ```
@@ -250,16 +263,19 @@ int common_cough_log_get_recent(...);      /* 获取最近记录 */
 ### 8.4 修改详情
 
 **cough_stat.c - cough_stat_to_json()**
+
 - 添加 `device_id` 字段：从 `common_config_get_device_id()` 获取
 - 添加 `ts` 字段：从 `time(RT_NULL)` 获取当前 Unix 时间戳
 - 优化数据复制：复制统计结构体数据到栈变量后释放锁，避免长时间持锁
 
 **common_config.c - 默认配置表**
+
 - `CFG_KEY_SERVER_URL` 默认值改为 `http://192.168.137.1:8000`（云端局域网地址）
 
 ### 8.5 云端接口说明
 
 云端 `/api/cough/stats` 接口具备完整兜底兼容：
+
 - `device_id` 缺失时使用 `demo_default_device_sn`
 - `ts` 缺失时使用服务器当前时间
 - `date` 支持 YYYYMMDD 数字格式自动转换
@@ -281,29 +297,29 @@ int common_cough_log_get_recent(...);      /* 获取最近记录 */
 
 ### 10.2 修改/新增文件
 
-| 文件 | 类型 | 说明 |
-|------|------|------|
-| `applications/common/common_network.c` | 修改 | 新增 `common_network_get_json()` HTTP GET 方法 |
-| `applications/common/common_network.h` | 修改 | 新增 `common_network_get_json()` 声明 |
-| `applications/common/ota.h` | 新增 | OTA 模块头文件 |
-| `applications/common/ota.c` | 新增 | OTA 检查实现（GET /ota/check） |
-| `applications/cough_detect/cough_stat.h` | 修改 | 新增事件队列 API 声明 |
-| `applications/cough_detect/cough_stat.c` | 修改 | 实现事件队列和批量上传 JSON 构造 |
-| `applications/cough_detect/cough_remind.h` | 修改 | 新增提醒同步 API 声明 |
-| `applications/cough_detect/cough_remind.c` | 修改 | 实现提醒同步相关函数 |
-| `applications/cough_detect/cough_detect.c` | 修改 | 云端上传逻辑（心跳/环境/事件/统计/提醒） |
+| 文件                                       | 类型 | 说明                                           |
+| ------------------------------------------ | ---- | ---------------------------------------------- |
+| `applications/common/common_network.c`     | 修改 | 新增 `common_network_get_json()` HTTP GET 方法 |
+| `applications/common/common_network.h`     | 修改 | 新增 `common_network_get_json()` 声明          |
+| `applications/common/ota.h`                | 新增 | OTA 模块头文件                                 |
+| `applications/common/ota.c`                | 新增 | OTA 检查实现（GET /ota/check）                 |
+| `applications/cough_detect/cough_stat.h`   | 修改 | 新增事件队列 API 声明                          |
+| `applications/cough_detect/cough_stat.c`   | 修改 | 实现事件队列和批量上传 JSON 构造               |
+| `applications/cough_detect/cough_remind.h` | 修改 | 新增提醒同步 API 声明                          |
+| `applications/cough_detect/cough_remind.c` | 修改 | 实现提醒同步相关函数                           |
+| `applications/cough_detect/cough_detect.c` | 修改 | 云端上传逻辑（心跳/环境/事件/统计/提醒）       |
 
 ### 10.3 新增 API 接口
 
-| 接口 | 方法 | 开发板调用位置 | 说明 |
-|------|------|--------------|------|
-| `/api/v1/device-api/heartbeat` | POST | `cloud_upload_heartbeat()` | 设备心跳上报 |
-| `/api/v1/device-api/environment` | POST | `cloud_upload_environment()` | 环境数据上传 |
-| `/api/v1/device-api/cough-events/batch` | POST | `cloud_upload_cough_events_batch()` | 咳嗽事件批量上传 |
-| `/api/v1/device-api/config` | GET | `cloud_fetch_config()` | 拉取云端设备配置 |
-| `/api/v1/device-api/ota/check` | GET | `cloud_check_ota()` | 检查固件更新 |
-| `/api/v1/device-api/reminders` | GET | `cloud_fetch_reminders()` | 从云端获取提醒设置 |
-| `/api/v1/device-api/reminders` | POST | `cloud_upload_reminders()` | 上传本地提醒到云端 |
+| 接口                                    | 方法 | 开发板调用位置                      | 说明               |
+| --------------------------------------- | ---- | ----------------------------------- | ------------------ |
+| `/api/v1/device-api/heartbeat`          | POST | `cloud_upload_heartbeat()`          | 设备心跳上报       |
+| `/api/v1/device-api/environment`        | POST | `cloud_upload_environment()`        | 环境数据上传       |
+| `/api/v1/device-api/cough-events/batch` | POST | `cloud_upload_cough_events_batch()` | 咳嗽事件批量上传   |
+| `/api/v1/device-api/config`             | GET  | `cloud_fetch_config()`              | 拉取云端设备配置   |
+| `/api/v1/device-api/ota/check`          | GET  | `cloud_check_ota()`                 | 检查固件更新       |
+| `/api/v1/device-api/reminders`          | GET  | `cloud_fetch_reminders()`           | 从云端获取提醒设置 |
+| `/api/v1/device-api/reminders`          | POST | `cloud_upload_reminders()`          | 上传本地提醒到云端 |
 
 ### 10.4 云端上传时序
 
@@ -340,37 +356,52 @@ cloud_upload_reminders()  ← POST /api/v1/device-api/reminders (上传本地提醒)
 ### 10.7 提醒同步设计
 
 #### 10.7.1 数据结构
+
 ```json
 {
   "slots": [
-    {"slot_index": 0, "hour": 8, "minute": 0, "enabled": true, "label": "Morning Medicine"},
-    {"slot_index": 1, "hour": 20, "minute": 30, "enabled": false, "label": "Night Medicine"}
+    {
+      "slot_index": 0,
+      "hour": 8,
+      "minute": 0,
+      "enabled": true,
+      "label": "Morning Medicine"
+    },
+    {
+      "slot_index": 1,
+      "hour": 20,
+      "minute": 30,
+      "enabled": false,
+      "label": "Night Medicine"
+    }
   ]
 }
 ```
 
 #### 10.7.2 同步逻辑
+
 - **拉取时机**：NTP 同步成功后自动从云端获取
 - **上传时机**：NTP 同步成功后自动上传本地提醒到云端
 - **保底机制**：当云端获取失败时，自动应用默认提醒配置（所有提醒关闭）
 - **默认配置**：默认提醒为空，所有插槽禁用
 
 #### 10.7.3 新增提醒 API 函数
-| 函数 | 说明 |
-|------|------|
-| `cough_remind_to_json()` | 将本地提醒序列化为 JSON |
-| `cough_remind_from_json()` | 从 JSON 应用提醒配置 |
+
+| 函数                            | 说明                     |
+| ------------------------------- | ------------------------ |
+| `cough_remind_to_json()`        | 将本地提醒序列化为 JSON  |
+| `cough_remind_from_json()`      | 从 JSON 应用提醒配置     |
 | `cough_remind_apply_defaults()` | 应用默认提醒配置（保底） |
-| `cough_remind_get_all_slots()` | 获取所有插槽数组指针 |
+| `cough_remind_get_all_slots()`  | 获取所有插槽数组指针     |
 
 ### 10.8 保底机制汇总
 
-| 功能 | 获取失败时保底行为 |
-|------|-------------------|
-| 云端配置拉取 | 使用本地硬编码配置 |
-| OTA 检查 | 静默忽略，继续运行 |
-| 提醒获取 | 应用默认提醒配置（全部禁用） |
-| 提醒上传 | 保留本地提醒，下次重试 |
+| 功能         | 获取失败时保底行为           |
+| ------------ | ---------------------------- |
+| 云端配置拉取 | 使用本地硬编码配置           |
+| OTA 检查     | 静默忽略，继续运行           |
+| 提醒获取     | 应用默认提醒配置（全部禁用） |
+| 提醒上传     | 保留本地提醒，下次重试       |
 
 ### 10.9 遵循开闭原则
 
@@ -388,6 +419,94 @@ cloud_upload_reminders()  ← POST /api/v1/device-api/reminders (上传本地提醒)
 - **提醒合并策略**：云端拉取时先从 Flash 加载本地提醒，再应用云端数据（云端权威），本地独有提醒不被清除
 - **提醒声音优化**：从单次上行琶音改为"叮-咚"风格，重复 3 次，更友好易察觉
 - **提醒弹窗**：触发提醒时屏幕弹出模态弹窗，显示时间+标签+"Got it!"按钮，按下或 30 秒后自动关闭
+
+---
+
+## 十二、小智AI语音助手集成
+
+### 12.1 功能描述
+
+集成"小智"AI语音助手，实现儿童咳嗽检测设备与AI语音交互功能的融合。核心解决咳嗽检测与语音助手共用同一麦克风带来的资源冲突问题。
+
+### 12.2 新增/修改文件
+
+#### 开发板端 (edgi-talk_cough)
+
+| 文件                                              | 类型 | 说明                                               |
+| ------------------------------------------------- | ---- | -------------------------------------------------- |
+| `applications/voice_assistant/voice_state.h`      | 新增 | 状态机头文件                                       |
+| `applications/voice_assistant/voice_state.c`      | 新增 | 状态机实现（状态转换、超时处理）                   |
+| `applications/voice_assistant/voice_assistant.h`  | 新增 | 语音助手主模块头文件                               |
+| `applications/voice_assistant/voice_assistant.c`  | 新增 | 语音助手主模块实现（stub）                         |
+| `applications/voice_assistant/audio_classifier.h` | 新增 | 音频分类器头文件                                   |
+| `applications/voice_assistant/audio_classifier.c` | 新增 | 音频分类器实现（VAD算法）                          |
+| `applications/voice_assistant/SConscript`         | 新增 | 编译配置                                           |
+| `applications/common/common_audio_capture.h`      | 修改 | 新增资源仲裁API                                    |
+| `applications/common/common_audio_capture.c`      | 修改 | 实现资源仲裁逻辑                                   |
+| `applications/common/common_led.h`                | 修改 | 新增LED模式（LISTENING/PROCESSING/PLAYING/NORMAL） |
+| `applications/cough_detect/cough_detect.c`        | 修改 | 集成voice_is_active()检查                          |
+| `applications/main.c`                             | 修改 | 初始化语音助手模块                                 |
+
+#### 云端 (edgi-talk-cough-cloud)
+
+| 文件                                                  | 类型 | 说明            |
+| ----------------------------------------------------- | ---- | --------------- |
+| `cloud_backend/app/api/v1/endpoints/voice_command.py` | 新增 | 语音命令处理API |
+| `cloud_backend/app/api/v1/endpoints/voice_tts.py`     | 新增 | 文本转语音API   |
+| `cloud_backend/app/api/v1/api.py`                     | 修改 | 注册语音API路由 |
+
+### 12.3 状态机设计
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │           VOICE_STATE_IDLE             │
+                    │   咳嗽检测运行 ?  语音助手停止          │
+                    └───────────────┬─────────────────────────┘
+                                    │ 用户触发"小智"
+                                    ▼
+                    ┌─────────────────────────────────────────┐
+                    │         VOICE_STATE_LISTENING           │
+                    │   咳嗽检测暂停 ?  语音助手录音          │
+                    └───────────────┬─────────────────────────┘
+                                    │ 录音结束/超时
+                                    ▼
+                    ┌─────────────────────────────────────────┐
+                    │         VOICE_STATE_PROCESSING          │
+                    │   咳嗽检测暂停 ?  等待云端AI响应        │
+                    └───────────────┬─────────────────────────┘
+                                    │ 收到TTS音频
+                                    ▼
+                    ┌─────────────────────────────────────────┐
+                    │          VOICE_STATE_PLAYING            │
+                    │   咳嗽检测暂停 ?  播放TTS音频          │
+                    └───────────────┬─────────────────────────┘
+                                    │ 播放结束
+                                    ▼
+                          (回到 IDLE)
+```
+
+### 12.4 音频资源仲裁机制
+
+通过 `common_audio_capture_request_exclusive()` 和 `common_audio_capture_release_exclusive()` 实现：
+
+- 咳嗽检测和语音助手不能同时使用麦克风
+- 语音助手活跃时，咳嗽检测线程主动让出麦克风
+- 状态切换时自动协调资源归属
+
+### 12.5 云端API
+
+| 接口                          | 方法 | 功能                     |
+| ----------------------------- | ---- | ------------------------ |
+| `/api/v1/voice/voice/command` | POST | 接收语音，返回AI响应+TTS |
+| `/api/v1/voice/voice/status`  | GET  | 查询语音服务状态         |
+| `/api/v1/voice/voice/tts`     | POST | 文本转语音               |
+
+### 12.6 注意事项
+
+- 当前为 **stub实现**，实际ASR/TTS/AI对话逻辑待集成
+- 需要后续对接具体AI服务（如百度ASR、腾讯TTS等）
+- 开发板端需要在咳嗽检测运行时按压按钮或通过其他方式触发语音助手
+- 所有新增/修改代码均标记 `// @yyc` 便于追溯
 
 ---
 

@@ -18,24 +18,25 @@
 #include "common/common_config.h"
 #include "cough_detect/cough_detect.h"
 #include "cough_ui/cough_ui.h"
+#include "voice_assistant/voice_assistant.h"  // @yyc add
 
 #define DBG_TAG    "main"
 #define DBG_LVL    DBG_INFO
 #include <rtdbg.h>
 
-/* Cough detection module â€” header included above */
+/* Cough detection module  header included above */
 
 #define UI_INIT_TIMEOUT_MS  5000
 #define ENV_SAMPLE_INTERVAL_MS  30000   /* read AHT20 every 30s */
 #define UI_REFRESH_INTERVAL_MS  5000    /* push env/stats to UI every 5s */
 
-/* â”€â”€ Periodic UI refresh timer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/*  Periodic UI refresh timer  */
 static struct rt_timer s_ui_refresh_timer;
 
 static void ui_refresh_callback(void *param)
 {
     (void)param;
-    /* Only send event â€” actual work (env I2C read, snprintf, mq send)
+    /* Only send event  actual work (env I2C read, snprintf, mq send)
      * runs in the control thread to avoid timer stack overflow. */
     cough_detect_send_event(CD_EVENT_UI_REFRESH);
 }
@@ -80,12 +81,19 @@ int main(void)
         return -1;
     }
 
+    /* Initialize voice assistant (??AI) - @yyc add */
+    if (voice_assistant_init() != 0)
+    {
+        LOG_W("Failed to initialize voice assistant!");
+        /* Non-fatal, continue without voice assistant */
+    }
+
     /* Load persisted settings from NOR Flash and apply to all subsystems
      * (remind slots, threshold, WiFi credentials, brightness, etc.)
      * Must be called AFTER cough_detect_init() which initializes remind/stat. */
     common_config_load_all();
 
-    /* Start periodic UI refresh (env + stats â†’ display) */
+    /* Start periodic UI refresh (env + stats  display) */
     rt_timer_init(&s_ui_refresh_timer, "ui_rfsh",
                   ui_refresh_callback, RT_NULL,
                   rt_tick_from_millisecond(UI_REFRESH_INTERVAL_MS),

@@ -10,6 +10,8 @@
 #include "../common/common_env.h"
 #include "../common/common_storage.h"
 #include "../common/common_config.h"
+#include "../common/common_audio_capture.h"  // @yyc add
+// #include "../voice_assistant/voice_state.h"  // @yyc add - temporarily disabled, will re-enable after SDK integration
 #include "../common/ota.h"
 
 #define DBG_TAG "cough"
@@ -112,6 +114,15 @@ static void mic_thread_entry(void *param)
 
     while (1)
     {
+        /* @yyc add: 如果语音助手活跃，跳过本次采集
+         * 这样可以避免与语音助手争夺麦克风资源 */
+        // TODO: @yyc Will be re-enabled after xiaozhi SDK integration
+        // if (voice_is_active())
+        // {
+        //     rt_thread_mdelay(50);
+        //     continue;
+        // }
+
         /* Block until one frame is available from the PDM driver */
         rt_size_t bytes = rt_device_read(s_mic_dev, 0, frame, CD_FRAME_BYTES);
         if (bytes != CD_FRAME_BYTES)
@@ -221,6 +232,15 @@ static void infer_thread_entry(void *param)
 
     while (1)
     {
+        /* @yyc add: 如果语音助手活跃，跳过推理
+         * 让语音助手独占麦克风资源 */
+        // TODO: @yyc Will be re-enabled after xiaozhi SDK integration
+        // if (voice_is_active())
+        // {
+        //     rt_thread_mdelay(50);
+        //     continue;
+        // }
+
         /* Wait until there is at least one frame to read */
         rt_mutex_take(s_ring_mutex, RT_WAITING_FOREVER);
         uint32_t avail = s_ring_wr - s_ring_rd;
