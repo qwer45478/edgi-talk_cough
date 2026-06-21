@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
 * Copyright (c) 2021 Shanghai QDay Technology Co., Ltd.
 * All rights reserved.
 *
@@ -20,6 +20,7 @@
 #include "stdbool.h"
 #include <string.h>
 #include "vg_lite.h"
+#include <rtthread.h>
 #include <rtdbg.h>
 /*********************
 *      DEFINES

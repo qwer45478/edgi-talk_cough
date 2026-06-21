@@ -13,8 +13,7 @@
 extern "C"
 {
 #include "../ui/xiaozhi_ui.h"
-extern void set_brightness(rt_uint8_t percent);
-extern rt_uint8_t get_brightness(void);
+#include "../../common/common_display.h"
 }
 
 #define TAG "Screen"
@@ -33,7 +32,10 @@ namespace iot
         {
             // 属性：亮度
             properties_.AddNumberProperty("brightness", "亮度", [this]() -> int
-                                          { return get_brightness(); });
+                                          {
+                                              const common_display_t *display = common_display_get();
+                                              return display ? display->brightness : screen_brightness;
+                                          });
 
             // 方法：设置表情
             methods_.AddMethod("SetEmoji", "设置表情", ParameterList({Parameter("emoji", "表情名称", kValueTypeString, true)}), [this](const ParameterList &parameters)
@@ -48,7 +50,8 @@ namespace iot
             int brightness = parameters["brightness"].number();
             if (brightness < 0) brightness = 0;
             if (brightness > 100) brightness = 100;
-            set_brightness(brightness);
+            screen_brightness = brightness;
+            common_display_set_brightness((rt_uint8_t)brightness);
             rt_kprintf("[%s] SetBrightness: %d\n", TAG, screen_brightness); });
         }
     };

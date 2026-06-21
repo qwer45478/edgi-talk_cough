@@ -42,8 +42,7 @@ static void webserver_thread_entry(void *parameter)
         rt_thread_mdelay(1000);
     }
 
-    /* Cleanup */
-    webnet_exit();
+    /* Current WebNet package does not expose a public shutdown API. */
     LOG_I("Web server: stopped");
 
 #else

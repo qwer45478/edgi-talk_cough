@@ -7,6 +7,12 @@ cwd     = GetCurrentDir()
 path = []
 path += [cwd]
 path += [cwd + '/ui', cwd + '/iot', cwd + '/mcp', cwd + '/wake_word']
+path += [cwd + '/ui/3d_demo/3d_demo/sample']
+path += [cwd + '/ui/3d_demo/3d_demo/litegfx/adapt',
+         cwd + '/ui/3d_demo/3d_demo/litegfx/plat',
+         cwd + '/ui/3d_demo/3d_demo/litegfx/vglite/include',
+         cwd + '/ui/3d_demo/3d_demo/sample/lz4',
+         cwd + '/ui/3d_demo/3d_demo/sample/resource/AnimatedEmoji']
 
 src = Glob('*.c') + Glob('*.cpp')
 

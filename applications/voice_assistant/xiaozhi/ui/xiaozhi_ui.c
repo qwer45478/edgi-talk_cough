@@ -13,6 +13,8 @@
 #include <stdlib.h>
 #include <lvgl.h>
 #include "xiaozhi_ui.h"
+#include "../../../cough_ui/cough_ui.h"
+#include "lv_example_virtual3d_animated_emoji.h"
 
 /*****************************************************************************
  * Macro Definitions
@@ -29,6 +31,7 @@
 #define UI_THREAD_STACK     (1024 * 10)
 #define UI_THREAD_PRIORITY  25
 #define UI_THREAD_TICK      10
+#define XIAOZHI_STANDALONE_UI_ENABLE 0
 
 /* Screen resolution specific definitions */
 #define SCREEN_WIDTH        800
@@ -95,6 +98,7 @@ extern void lv_port_disp_init(void);
 /* Synchronization */
 static struct rt_semaphore s_ui_init_sem;
 static struct rt_messagequeue s_ui_mq;
+static rt_bool_t s_ui_started = RT_FALSE;
 static char s_mq_pool[UI_MSG_POOL_SIZE * sizeof(ui_msg_t)];
 
 /* Scale factor for different screen sizes */
@@ -366,6 +370,11 @@ static void ui_send_message(ui_cmd_t cmd, const char *data, const char *default_
 {
     ui_msg_t msg;
 
+    if (!s_ui_started)
+    {
+        return;
+    }
+
     msg.cmd = cmd;
     if (data != RT_NULL)
     {
@@ -608,10 +617,17 @@ void xiaozhi_ui_init(void)
 {
     rt_thread_t tid;
 
+#if !XIAOZHI_STANDALONE_UI_ENABLE
+    LOG_I("Standalone Xiaozhi UI disabled");
+    return;
+#endif
+
     /* Initialize synchronization primitives */
     rt_sem_init(&s_ui_init_sem, "ui_sem", 0, RT_IPC_FLAG_PRIO);
     rt_mq_init(&s_ui_mq, "ui_mq", s_mq_pool, sizeof(ui_msg_t),
                sizeof(s_mq_pool), RT_IPC_FLAG_FIFO);
+
+    s_ui_started = RT_TRUE;
 
     /* Create UI thread */
     tid = rt_thread_create("xz_ui", ui_thread_entry, RT_NULL,
@@ -622,27 +638,44 @@ void xiaozhi_ui_init(void)
     }
     else
     {
+        s_ui_started = RT_FALSE;
         LOG_E("Create UI thread failed");
     }
 }
 
 rt_err_t xiaozhi_ui_wait_ready(rt_int32_t timeout)
 {
+    if (!s_ui_started)
+    {
+        return RT_EOK;
+    }
     return rt_sem_take(&s_ui_init_sem, timeout);
 }
 
 void xiaozhi_ui_set_status(const char *status)
 {
+#if !XIAOZHI_STANDALONE_UI_ENABLE
+    cough_ui_xiaozhi_set_status(status);
+    return;
+#endif
     ui_send_message(UI_CMD_SET_STATUS, status, "");
 }
 
 void xiaozhi_ui_set_output(const char *output)
 {
+#if !XIAOZHI_STANDALONE_UI_ENABLE
+    cough_ui_xiaozhi_set_output(output);
+    return;
+#endif
     ui_send_message(UI_CMD_SET_OUTPUT, output, "");
 }
 
 void xiaozhi_ui_set_emoji(const char *emoji)
 {
+#if !XIAOZHI_STANDALONE_UI_ENABLE
+    cough_ui_xiaozhi_set_emoji(emoji);
+    return;
+#endif
     ui_send_message(UI_CMD_SET_EMOJI, emoji, "neutral");
 }
 
@@ -653,6 +686,10 @@ void xiaozhi_ui_set_adc(const char *adc_str)
 
 void xiaozhi_ui_clear_info(void)
 {
+#if !XIAOZHI_STANDALONE_UI_ENABLE
+    cough_ui_xiaozhi_clear();
+    return;
+#endif
     ui_send_message(UI_CMD_CLEAR_INFO, RT_NULL, RT_NULL);
 }
 
@@ -707,22 +744,22 @@ void clean_info(void)
     xiaozhi_ui_clear_info();
 }
 
-void xiaozhi_ui_chat_status(char *string)
+void xiaozhi_ui_chat_status(const char *string)
 {
     xiaozhi_ui_set_status(string);
 }
 
-void xiaozhi_ui_chat_output(char *string)
+void xiaozhi_ui_chat_output(const char *string)
 {
     xiaozhi_ui_set_output(string);
 }
 
-void xiaozhi_ui_update_emoji(char *string)
+void xiaozhi_ui_update_emoji(const char *string)
 {
     xiaozhi_ui_set_emoji(string);
 }
 
-void xiaozhi_ui_update_adc(char *string)
+void xiaozhi_ui_update_adc(const char *string)
 {
     xiaozhi_ui_set_adc(string);
 }

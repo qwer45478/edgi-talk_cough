@@ -15,6 +15,7 @@ void qday_show_emoji_by_rtt_info(int index);
 #endif
 
 #define TAG "Speaker"
+#define XIAOZHI_3D_EMOJI_ENABLE 0
 
 namespace iot {
 
@@ -46,6 +47,7 @@ public:
                 volume = 100;
             }
             
+#if XIAOZHI_3D_EMOJI_ENABLE
             if(volume < current_volume_)
             {
                 qday_show_emoji_by_rtt_info(111);
@@ -54,6 +56,7 @@ public:
             {
                 qday_show_emoji_by_rtt_info(110);
             }
+#endif
             
             current_volume_ = volume;
             struct rt_audio_caps caps;

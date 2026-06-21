@@ -179,7 +179,7 @@ void send_iot_descriptors(void);
 err_t my_wsapp_fn(int code, char *buf, size_t len);
 void reconnect_websocket(void);
 void xz_ws_audio_init(void);
-char *my_json_string(cJSON *json, char *key);
+char *my_json_string(cJSON *json, const char *key);
 void Message_handle(const uint8_t *data, uint16_t len);
 void svr_found_callback(const char *name, const ip_addr_t *ipaddr, void *callback_arg);
 int check_internet_access(void);
@@ -188,6 +188,8 @@ int http_xiaozhi_data_parse_ws(char *json_data);
 void xiaozhi_ws_connect(void);
 void xiaozhi_entry(void *p);
 int ws_xiaozhi_init(void);
+void xiaozhi_trigger_wake(void);
+void xiaozhi_trigger_toggle(void);
 
 void xz_sound_init(void);
 int xz_mic_init(void);

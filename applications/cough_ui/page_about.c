@@ -119,7 +119,7 @@ void page_about_create(lv_obj_t *parent)
 
     /* ─── Footer ───────────────────────────────────────────────── */
     lv_obj_t *footer = lv_label_create(parent);
-    lv_label_set_text(footer, "Built with " LV_SYMBOL_OK " for EEMC 2026");
+    lv_label_set_text(footer, "");
     lv_obj_set_style_text_color(footer, lv_color_hex(CLR_TEXT_MUTED), LV_PART_MAIN);
     lv_obj_set_style_text_font(footer, &lv_font_montserrat_14, LV_PART_MAIN);
 }

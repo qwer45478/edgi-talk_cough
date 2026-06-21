@@ -11,6 +11,10 @@
 
 #include <rtthread.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define COMMON_AUDIO_CAPTURE_DEVICE_NAME   "mic0"
 
 /* ===== 音频使用者类型 ===== */
@@ -81,5 +85,9 @@ int common_audio_capture_get_exclusive_owner(void);
  * 注意：这是一个简单的检查，基于独占模式标志
  */
 rt_bool_t common_audio_capture_is_voice_assistant_active(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* COMMON_AUDIO_CAPTURE_H */

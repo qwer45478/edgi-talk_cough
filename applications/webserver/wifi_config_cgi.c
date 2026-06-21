@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include "common_network.h"
 
+#define DBG_TAG "wifi.cgi"
+#define DBG_LVL DBG_INFO
+#include <rtdbg.h>
+
 /* ── HTML Page ────────────────────────────────────────────────────── */  // @yyc edit: WiFi配网页面HTML
 
 static const char s_html_page[] = 
@@ -261,10 +265,10 @@ static const char s_html_page[] =
 "            btn.innerHTML = '<span class=\"spinner\"></span>Connecting...';\r\n"
 "            showStatus('Connecting...', 'loading');\r\n"
 "            \r\n"
-"            var body = JSON.stringify({ ssid: selectedSSID, password: password });\r\n"
+"            var body = 'ssid=' + encodeURIComponent(selectedSSID) + '&password=' + encodeURIComponent(password);\r\n"
 "            fetch('/cgi/wifi_connect', {\r\n"
 "                method: 'POST',\r\n"
-"                headers: { 'Content-Type': 'application/json' },\r\n"
+"                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\r\n"
 "                body: body\r\n"
 "            })\r\n"
 "            .then(function(r) { return r.json(); })\r\n"
@@ -306,64 +310,109 @@ static const char s_html_page[] =
 
 #ifdef PKG_USING_WEBNET
 #include <webnet.h>
+#include <wn_session.h>
+#include <wn_request.h>
+#include <wn_module.h>
+#ifdef RT_USING_WIFI
+#include <wlan_mgnt.h>
+#endif
 
 /* Forward declarations */
 static void wifi_scan_cgi_handler(struct webnet_session *session);
 static void wifi_connect_cgi_handler(struct webnet_session *session);
 static void wifi_config_index_handler(struct webnet_session *session);
 
-/* ── Index Page Handler ───────────────────────────────────────── */  // @yyc edit: 首页CGI接口
+#ifdef RT_USING_WIFI
+#define WIFI_SCAN_MAX_RESULTS 10
+
+struct wifi_scan_cache
+{
+    int count;
+    struct rt_wlan_info info[WIFI_SCAN_MAX_RESULTS];
+};
+
+static void wifi_scan_report_callback(int event, struct rt_wlan_buff *buff, void *parameter)
+{
+    struct wifi_scan_cache *cache = (struct wifi_scan_cache *)parameter;
+    struct rt_wlan_info *info;
+
+    if (event != RT_WLAN_EVT_SCAN_REPORT || buff == RT_NULL || buff->data == RT_NULL || cache == RT_NULL)
+    {
+        return;
+    }
+
+    if (buff->len != sizeof(struct rt_wlan_info) || cache->count >= WIFI_SCAN_MAX_RESULTS)
+    {
+        return;
+    }
+
+    info = (struct rt_wlan_info *)buff->data;
+    if (info->ssid.len == 0 || info->ssid.val[0] == '\0')
+    {
+        return;
+    }
+
+    rt_memcpy(&cache->info[cache->count], info, sizeof(struct rt_wlan_info));
+    cache->count++;
+}
+#endif
 
 static void wifi_config_index_handler(struct webnet_session *session)
 {
     static const char *mimetype = "text/html";
-    
-    /* Set HTTP header and write response */
+
     session->request->result_code = 200;
     webnet_session_set_header(session, mimetype, 200, "Ok", rt_strlen(s_html_page));
     webnet_session_write(session, (const rt_uint8_t *)s_html_page, rt_strlen(s_html_page));
 }
 
-/* ── WiFi Scan CGI Handler ─────────────────────────────────────── */  // @yyc edit: WiFi扫描CGI接口
-
 static void wifi_scan_cgi_handler(struct webnet_session *session)
 {
     static char response[2048];
     int response_len = 0;
-    
+
     LOG_I("CGI: WiFi scan request");
-    
+
 #ifdef RT_USING_WIFI
-    /* Perform synchronous WiFi scan */
-    struct rt_wlan_scan_result *results = rt_wlan_scan_sync();
-    if (results == RT_NULL || results->num == 0)
+    struct wifi_scan_cache cache;
+    char *p = response;
+    int len = sizeof(response);
+    int written;
+    int found;
+
+    rt_memset(&cache, 0, sizeof(cache));
+    rt_wlan_register_event_handler(RT_WLAN_EVT_SCAN_REPORT, wifi_scan_report_callback, &cache);
+    if (rt_wlan_scan() != RT_EOK)
     {
+        rt_wlan_unregister_event_handler(RT_WLAN_EVT_SCAN_REPORT);
         response_len = rt_snprintf(response, sizeof(response),
-                    "{\"code\":-1,\"msg\":\"No networks found\",\"networks\":[]}");
+                    "{\"code\":-1,\"msg\":\"Scan start failed\",\"networks\":[]}");
         session->request->result_code = 200;
         webnet_session_set_header(session, "application/json", 200, "Ok", response_len);
         webnet_session_write(session, (const rt_uint8_t *)response, response_len);
         return;
     }
 
-    /* Build JSON response */
-    char *p = response;
-    int len = sizeof(response);
-    int written;
-    int count = results->num > 10 ? 10 : results->num;  /* Limit to 10 networks */
-    int found = 0;
+    rt_thread_mdelay(3000);
+    rt_wlan_unregister_event_handler(RT_WLAN_EVT_SCAN_REPORT);
 
-    written = rt_snprintf(p, len, "{\"code\":0,\"msg\":\"OK\",\"num\":%d,\"networks\":[", count);
+    written = rt_snprintf(p, len, "{\"code\":0,\"msg\":\"OK\",\"num\":%d,\"networks\":[", cache.count);
     p += written;
     len -= written;
 
-    for (int i = 0; i < results->num && found < count; i++)
+    for (found = 0; found < cache.count; found++)
     {
-        struct rt_wlan_info *info = &results->info[i];
-        if (info == RT_NULL) continue;
+        struct rt_wlan_info *info = &cache.info[found];
+        char ssid_str[34] = {0};
+        int ssid_len = info->ssid.len;
+        int is_encrypted = (info->security != SECURITY_OPEN);
 
-        /* Skip hidden SSIDs (empty SSID) */
-        if (info->ssid.len == 0 || info->ssid.val[0] == '\0') continue;
+        if (ssid_len >= (int)sizeof(ssid_str))
+        {
+            ssid_len = sizeof(ssid_str) - 1;
+        }
+        rt_memcpy(ssid_str, info->ssid.val, ssid_len);
+        ssid_str[ssid_len] = '\0';
 
         if (found > 0)
         {
@@ -372,43 +421,92 @@ static void wifi_scan_cgi_handler(struct webnet_session *session)
             len -= written;
         }
 
-        /* Get RSSI directly from info */
-        int rssi = info->rssi;
-        
-        /* Check if open network */
-        int is_encrypted = (info->security != SECURITY_OPEN);
-        
-        /* Build SSID string with proper length */
-        char ssid_str[34] = {0};
-        rt_strncpy(ssid_str, (const char *)info->ssid.val, info->ssid.len);
-        
         written = rt_snprintf(p, len,
             "{\"ssid\":\"%s\",\"rssi\":%d,\"encrypted\":%s}",
             ssid_str,
-            rssi,
+            info->rssi,
             is_encrypted ? "true" : "false");
         p += written;
         len -= written;
-        found++;
     }
 
     written = rt_snprintf(p, len, "]}");
     response_len = p - response + written;
 
-    LOG_I("CGI: WiFi scan returned %d networks", found);
-    
+    LOG_I("CGI: WiFi scan returned %d networks", cache.count);
 #else
     rt_strncpy(response, "{\"code\":-2,\"msg\":\"WiFi not available\",\"networks\":[]}", sizeof(response) - 1);
     response_len = rt_strlen(response);
 #endif
 
-    /* Send response */
     session->request->result_code = 200;
     webnet_session_set_header(session, "application/json", 200, "Ok", response_len);
     webnet_session_write(session, (const rt_uint8_t *)response, response_len);
 }
+static void wifi_copy_field(char *dst, int dst_size, const char *src)
+{
+    if (dst == RT_NULL || dst_size <= 0)
+    {
+        return;
+    }
 
-/* ── WiFi Connect CGI Handler ─────────────────────────────────── */  // @yyc edit: WiFi连接CGI接口
+    dst[0] = '\0';
+    if (src == RT_NULL)
+    {
+        return;
+    }
+
+    rt_strncpy(dst, src, dst_size - 1);
+    dst[dst_size - 1] = '\0';
+}
+
+static void wifi_parse_json_field(const char *body, const char *name, char *dst, int dst_size)
+{
+    const char *start;
+    const char *end;
+    char pattern[32];
+    int len;
+
+    if (body == RT_NULL || name == RT_NULL || dst == RT_NULL || dst_size <= 0)
+    {
+        return;
+    }
+
+    rt_snprintf(pattern, sizeof(pattern), "\"%s\"", name);
+    start = strstr(body, pattern);
+    if (start == RT_NULL)
+    {
+        return;
+    }
+
+    start = strchr(start, ':');
+    if (start == RT_NULL)
+    {
+        return;
+    }
+
+    start = strchr(start, '"');
+    if (start == RT_NULL)
+    {
+        return;
+    }
+    start++;
+
+    end = strchr(start, '"');
+    if (end == RT_NULL)
+    {
+        return;
+    }
+
+    len = end - start;
+    if (len <= 0 || len >= dst_size)
+    {
+        return;
+    }
+
+    rt_strncpy(dst, start, len);
+    dst[len] = '\0';
+}
 
 static void wifi_connect_cgi_handler(struct webnet_session *session)
 {
@@ -416,9 +514,12 @@ static void wifi_connect_cgi_handler(struct webnet_session *session)
     int response_len;
     char ssid[64] = {0};
     char password[128] = {0};
-    const char *body;
-    int body_len;
-    
+    const char *body = RT_NULL;
+    int body_len = 0;
+    const char *form_ssid;
+    const char *form_password;
+    char body_buf[256];
+
     /* Only accept POST method */
     if (session->request->method != WEBNET_POST)
     {
@@ -429,77 +530,39 @@ static void wifi_connect_cgi_handler(struct webnet_session *session)
         webnet_session_write(session, (const rt_uint8_t *)response, response_len);
         return;
     }
-    
-    /* Get request body from session buffer */
-    body = (const char *)session->buffer;
-    body_len = session->buffer_offset;
-    
-    if (body_len <= 0 || body == RT_NULL)
-    {
-        response_len = rt_snprintf(response, sizeof(response),
-                    "{\"code\":-2,\"msg\":\"No body\"}");
-        session->request->result_code = 400;
-        webnet_session_set_header(session, "application/json", 400, "Bad Request", response_len);
-        webnet_session_write(session, (const rt_uint8_t *)response, response_len);
-        return;
-    }
-    
-    LOG_I("CGI: WiFi connect request, body_len=%d", body_len);
-    
-    /* Ensure null-terminated for string parsing */
-    if (body_len >= (int)sizeof(session->buffer))
-    {
-        body_len = sizeof(session->buffer) - 1;
-    }
-    
-    /* Parse JSON (simple parsing) */
-    /* Extract ssid */
-    const char *ssid_start = strstr(body, "\"ssid\"");
-    if (ssid_start)
-    {
-        ssid_start = strchr(ssid_start, ':');
-        if (ssid_start)
-        {
-            ssid_start = strchr(ssid_start, '"');
-            if (ssid_start)
-            {
-                ssid_start++;
-                const char *ssid_end = strchr(ssid_start, '"');
-                if (ssid_end)
-                {
-                    int len = ssid_end - ssid_start;
-                    if (len > 0 && len < (int)sizeof(ssid))
-                    {
-                        rt_strncpy(ssid, ssid_start, len);
-                        ssid[len] = '\0';
-                    }
-                }
-            }
-        }
-    }
 
-    /* Extract password */
-    const char *pass_start = strstr(body, "\"password\"");
-    if (pass_start)
+    form_ssid = webnet_request_get_query(session->request, "ssid");
+    form_password = webnet_request_get_query(session->request, "password");
+    if (form_ssid != RT_NULL)
     {
-        pass_start = strchr(pass_start, ':');
-        if (pass_start)
+        wifi_copy_field(ssid, sizeof(ssid), form_ssid);
+        wifi_copy_field(password, sizeof(password), form_password);
+        LOG_I("CGI: WiFi connect form received, content_length=%d", session->request->content_length);
+    }
+    else
+    {
+        if (session->request->query != RT_NULL && session->request->content_length > 0)
         {
-            pass_start = strchr(pass_start, '"');
-            if (pass_start)
+            body = session->request->query;
+            body_len = session->request->content_length;
+        }
+        else if (session->buffer_offset > 0)
+        {
+            body = (const char *)session->buffer;
+            body_len = session->buffer_offset;
+        }
+
+        if (body_len > 0 && body != RT_NULL)
+        {
+            if (body_len >= (int)sizeof(body_buf))
             {
-                pass_start++;
-                const char *pass_end = strchr(pass_start, '"');
-                if (pass_end)
-                {
-                    int len = pass_end - pass_start;
-                    if (len > 0 && len < (int)sizeof(password))
-                    {
-                        rt_strncpy(password, pass_start, len);
-                        password[len] = '\0';
-                    }
-                }
+                body_len = sizeof(body_buf) - 1;
             }
+            rt_memcpy(body_buf, body, body_len);
+            body_buf[body_len] = '\0';
+            LOG_I("CGI: WiFi connect raw body received, body_len=%d", body_len);
+            wifi_parse_json_field(body_buf, "ssid", ssid, sizeof(ssid));
+            wifi_parse_json_field(body_buf, "password", password, sizeof(password));
         }
     }
 
@@ -515,7 +578,7 @@ static void wifi_connect_cgi_handler(struct webnet_session *session)
     }
 
     LOG_I("CGI: Received WiFi connect request for SSID: %s", ssid);
-    
+
     /* Set pending WiFi credentials (will be picked up by AP config thread) */
     common_network_set_pending_wifi(ssid, password);
 
@@ -526,13 +589,14 @@ static void wifi_connect_cgi_handler(struct webnet_session *session)
     webnet_session_write(session, (const rt_uint8_t *)response, response_len);
 }
 
-/* ── CGI Route Registration ──────────────────────────────────── */  // @yyc edit: CGI路由注册
-
+/* CGI Route Registration */
 int wifi_config_cgi_init(void)
 {
+    webnet_cgi_set_root("/cgi/");
     /* Register CGI handlers */
     webnet_cgi_register("wifi_scan", wifi_scan_cgi_handler);
     webnet_cgi_register("wifi_connect", wifi_connect_cgi_handler);
+    webnet_cgi_register("index", wifi_config_index_handler);
     
     LOG_I("WiFi config CGI initialized");
     return 0;

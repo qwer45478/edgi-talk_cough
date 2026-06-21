@@ -9,6 +9,10 @@
 
 #include <rtthread.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* WiFi credentials - can be overridden via MSH or cloud config */
 #define COMMON_NETWORK_DEFAULT_SSID     "qwer"
 #define COMMON_NETWORK_DEFAULT_PASSWORD "bzjn7944"
@@ -37,6 +41,9 @@ int common_network_connect(void);
 
 rt_bool_t common_network_is_ready(void);
 common_network_state_t common_network_get_state(void);
+rt_bool_t common_network_has_server(void);
+typedef void (*common_network_status_cb_t)(common_network_state_t state);
+void common_network_set_status_callback(common_network_status_cb_t callback);
 
 /* Upload JSON payload via HTTP POST */
 int common_network_upload_json(const char *path, const char *json_payload);
@@ -142,5 +149,9 @@ void common_network_ap_connect_failed(void);
  * Internal function, called by CGI handlers.
  */
 void common_network_set_pending_wifi(const char *ssid, const char *password);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

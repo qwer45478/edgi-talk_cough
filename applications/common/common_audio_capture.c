@@ -135,7 +135,7 @@ int common_audio_capture_request_exclusive(audio_user_t user)
 
     rt_mutex_release(s_capture.mutex);
 
-    LOG_I("Audio capture granted to user=%d", user);
+    LOG_D("Audio capture granted to user=%d", user);
     return RT_EOK;
 }
 
@@ -152,7 +152,7 @@ void common_audio_capture_release_exclusive(audio_user_t user)
     if (s_capture.is_exclusive && s_capture.exclusive_owner == user)
     {
         s_capture.is_exclusive = RT_FALSE;
-        LOG_I("Audio capture released by user=%d", user);
+        LOG_D("Audio capture released by user=%d", user);
     }
     else
     {

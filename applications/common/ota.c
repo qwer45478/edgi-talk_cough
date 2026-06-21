@@ -11,6 +11,7 @@
 #include <rtthread.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #define DBG_TAG "ota"
 #define DBG_LVL DBG_INFO

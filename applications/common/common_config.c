@@ -91,6 +91,7 @@ int common_config_init(void)
     else
     {
         rt_strncpy(s_device_id, id_buf, sizeof(s_device_id) - 1);
+        s_device_id[sizeof(s_device_id) - 1] = '\0';
         LOG_I("Device ID: %s", s_device_id);
     }
 
@@ -124,7 +125,7 @@ int common_config_set_str(const char *key, const char *value)
 /* ©¤©¤ Typed helpers ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ */
 int common_config_get_int(const char *key, int default_val)
 {
-    char buf[16];
+    char buf[16] = {0};
     if (common_config_get_str(key, buf, sizeof(buf)) == 0)
         return default_val;
     return atoi(buf);
@@ -139,7 +140,7 @@ void common_config_set_int(const char *key, int value)
 
 float common_config_get_float(const char *key, float default_val)
 {
-    char buf[16];
+    char buf[16] = {0};
     if (common_config_get_str(key, buf, sizeof(buf)) == 0)
         return default_val;
     /* atof may not be available on all embedded toolchains;
@@ -192,14 +193,27 @@ void common_config_load_all(void)
     {
         common_network_configure(ssid, pass);
         LOG_I("WiFi config loaded: SSID=%s", ssid);
+        if (!common_network_is_ready())
+        {
+            common_network_connect();
+        }
     }
 
     /* --- Server URL --- */
-    if (common_config_get_str(CFG_KEY_SERVER_URL, buf, sizeof(buf)) > 0 && buf[0] != '\0')
+    if (common_config_get_str(CFG_KEY_SERVER_URL, buf, sizeof(buf)) <= 0)
     {
-        common_network_set_server(buf);
-        LOG_I("Server URL loaded: %s", buf);
+        buf[0] = '\0';
     }
+    if (rt_strcmp(buf, "http://192.168.137.1:8000") == 0)
+    {
+        LOG_W("Server URL is placeholder (%s); cloud sync disabled", buf);
+        buf[0] = '\0';
+    }
+    common_network_set_server(buf);
+    if (buf[0] != '\0')
+        LOG_I("Server URL loaded: %s", buf);
+    else
+        LOG_I("Server URL not configured; cloud sync disabled");
 
     /* --- Brightness --- */
     int brightness = common_config_get_int(CFG_KEY_BRIGHTNESS, CFG_DEFAULT_BRIGHTNESS);
@@ -343,4 +357,39 @@ static void cfg_set(int argc, char **argv)
         rt_kprintf("FAILED\n");
 }
 MSH_CMD_EXPORT_ALIAS(cfg_set, cfg_set, Set a config key value);
+static void cfg_reset(int argc, char **argv)
+{
+    const struct fal_partition *part;
+
+    if (argc < 2 || rt_strcmp(argv[1], "yes") != 0)
+    {
+        rt_kprintf("Usage: cfg_reset yes\n");
+        rt_kprintf("This erases WiFi/server/threshold/device_id config and reboots.\n");
+        return;
+    }
+
+    if (s_inited)
+    {
+        fdb_kvdb_deinit(&s_kvdb);
+        s_inited = RT_FALSE;
+    }
+
+    part = fal_partition_find("config");
+    if (part == RT_NULL)
+    {
+        rt_kprintf("config partition not found\n");
+        return;
+    }
+
+    if (fal_partition_erase_all(part) < 0)
+    {
+        rt_kprintf("erase config partition failed\n");
+        return;
+    }
+
+    rt_kprintf("config partition erased, rebooting...\n");
+    rt_thread_mdelay(100);
+    rt_hw_cpu_reset();
+}
+MSH_CMD_EXPORT_ALIAS(cfg_reset, cfg_reset, Erase FlashDB config partition);
 

@@ -17,6 +17,7 @@
 
 /* @yyc add: include common audio capture for resource arbitration */
 #include "../../common/common_audio_capture.h"
+#include "../../cough_detect/cough_detect.h"
 
 /* Device name configurations */
 #ifndef BSP_XIAOZHI_SOUND_DEVICE_NAME
@@ -43,7 +44,7 @@ extern "C"
 #include <rtdbg.h>
 
 /* Global Variables */
-static xz_audio_t xz_audio;
+static xz_audio_t xz_audio __attribute__((section(".cy_socmem_bss")));
 static rt_event_t mic_event = RT_NULL;
 
 void mic_thread_entry(void *param);
@@ -97,10 +98,14 @@ void xz_mic_open(xz_audio_t *thiz)
 {
     if (!thiz->is_rx_enable)
     {
+        cough_detect_pause();
+        rt_thread_mdelay(250);
+
         /* @yyc add: request exclusive access to audio capture */
         if (common_audio_capture_request_exclusive(AUDIO_USER_VOICE_ASSISTANT) != RT_EOK)
         {
             LOG_E("Audio: Failed to request exclusive audio capture");
+            cough_detect_resume();
             return;
         }
 
@@ -115,6 +120,7 @@ void xz_mic_open(xz_audio_t *thiz)
             /* @yyc add: release on failure */
             LOG_E("Audio: Failed to open microphone device");
             common_audio_capture_release_exclusive(AUDIO_USER_VOICE_ASSISTANT);
+            cough_detect_resume();
         }
     }
     else
@@ -131,6 +137,7 @@ void xz_mic_close(xz_audio_t *thiz)
         rt_device_close(thiz->rt_mic_dev);
         /* @yyc add: release exclusive access to audio capture */
         common_audio_capture_release_exclusive(AUDIO_USER_VOICE_ASSISTANT);
+        cough_detect_resume();
         LOG_I("Audio: Microphone closed");
         thiz->is_rx_enable = 0;
     }

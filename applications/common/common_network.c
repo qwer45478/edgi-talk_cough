@@ -26,15 +26,69 @@
 #endif
 
 static common_network_t s_network;
+static common_network_status_cb_t s_network_status_cb = RT_NULL;
+
+static void network_set_state(common_network_state_t state)
+{
+    if (s_network.state == state)
+    {
+        return;
+    }
+    s_network.state = state;
+    if (s_network_status_cb)
+    {
+        s_network_status_cb(state);
+    }
+}
 
 #ifdef RT_USING_WIFI
+static void network_set_sta_default_netdev(void)
+{
+    struct netdev *sta_netdev = netdev_get_by_name("w0");
+
+    if (sta_netdev == RT_NULL)
+    {
+        sta_netdev = netdev_get_by_name(RT_WLAN_DEVICE_STA_NAME);
+    }
+
+    if (sta_netdev == RT_NULL)
+    {
+        LOG_W("STA netdev not found, cannot set default route");
+        return;
+    }
+
+    netdev_set_default(sta_netdev);
+    LOG_I("STA netdev %s set as default route", sta_netdev->name);
+}
+#endif
+#ifdef RT_USING_WIFI
+static rt_err_t network_start_sta_connect_with_retry(const char *ssid, const char *password, int attempts)
+{
+    rt_err_t result = -RT_ERROR;
+    int i;
+
+    for (i = 0; i < attempts; i++)
+    {
+        result = rt_wlan_connect(ssid, password);
+        if (result == RT_EOK)
+        {
+            return RT_EOK;
+        }
+
+        LOG_W("WiFi connect start failed: %d (attempt %d/%d)", result, i + 1, attempts);
+        rt_thread_mdelay(1000);
+    }
+
+    return result;
+}
 static void wifi_ready_handler(int event, struct rt_wlan_buff *buff, void *parameter)
 {
     RT_UNUSED(event);
     RT_UNUSED(buff);
     RT_UNUSED(parameter);
-    s_network.state = NETWORK_STATE_CONNECTED;
+    network_set_sta_default_netdev();
     s_network.is_ready = RT_TRUE;
+    network_set_state(NETWORK_STATE_CONNECTED);
     LOG_I("WiFi connected, network ready");
 
     /* Trigger NTP sync via control thread event (can't block in event handler) */
@@ -47,8 +101,8 @@ static void wifi_disconnect_handler(int event, struct rt_wlan_buff *buff, void *
     RT_UNUSED(event);
     RT_UNUSED(buff);
     RT_UNUSED(parameter);
-    s_network.state = NETWORK_STATE_DISCONNECTED;
     s_network.is_ready = RT_FALSE;
+    network_set_state(NETWORK_STATE_DISCONNECTED);
     LOG_W("WiFi disconnected");
 }
 #endif
@@ -57,8 +111,8 @@ int common_network_init(void)
 {
     common_power_set_wifi(RT_TRUE);
     rt_memset(&s_network, 0, sizeof(s_network));
-    s_network.state = NETWORK_STATE_DISCONNECTED;
     s_network.is_ready = RT_FALSE;
+    network_set_state(NETWORK_STATE_DISCONNECTED);
 
 #ifdef RT_USING_WIFI
     /* Register WiFi event handlers */
@@ -68,14 +122,8 @@ int common_network_init(void)
 
     /* Enable auto-reconnect */
     rt_wlan_config_autoreconnect(RT_TRUE);
-
-    /* Auto-connect with default credentials if configured */
-    if (COMMON_NETWORK_DEFAULT_SSID[0] != '\0')
-    {
-        common_network_configure(COMMON_NETWORK_DEFAULT_SSID,
-                                 COMMON_NETWORK_DEFAULT_PASSWORD);
-        common_network_connect();
-    }
+    /* WiFi auto-connect is deferred until FlashDB settings are loaded.
+     * Starting a join here races early WLAN setup and creates a false failure log. */
 #endif
 
     LOG_I("network service initialized");
@@ -129,18 +177,18 @@ int common_network_connect(void)
     if (rt_device_find("w0") == RT_NULL)
     {
         LOG_E("WLAN device w0 not found, WHD driver may not be ready");
-        s_network.state = NETWORK_STATE_ERROR;
+        network_set_state(NETWORK_STATE_ERROR);
         return -RT_EIO;
     }
 
-    s_network.state = NETWORK_STATE_CONNECTING;
+    network_set_state(NETWORK_STATE_CONNECTING);
     LOG_I("Connecting to WiFi: %s", s_network.ssid);
 
     result = rt_wlan_connect(s_network.ssid, s_network.password);
     if (result != RT_EOK)
     {
         LOG_E("WiFi connect failed: %d", result);
-        s_network.state = NETWORK_STATE_ERROR;
+        network_set_state(NETWORK_STATE_ERROR);
         return result;
     }
 
@@ -148,8 +196,9 @@ int common_network_connect(void)
     result = rt_wlan_is_ready();
     if (result)
     {
-        s_network.state = NETWORK_STATE_CONNECTED;
+        network_set_sta_default_netdev();
         s_network.is_ready = RT_TRUE;
+        network_set_state(NETWORK_STATE_CONNECTED);
     }
 
     return RT_EOK;
@@ -166,6 +215,20 @@ rt_bool_t common_network_is_ready(void)
 common_network_state_t common_network_get_state(void)
 {
     return s_network.state;
+}
+
+rt_bool_t common_network_has_server(void)
+{
+    return s_network.server_url[0] != '\0';
+}
+
+void common_network_set_status_callback(common_network_status_cb_t callback)
+{
+    s_network_status_cb = callback;
+    if (s_network_status_cb)
+    {
+        s_network_status_cb(s_network.state);
+    }
 }
 
 int common_network_upload_json(const char *path, const char *json_payload)
@@ -621,11 +684,48 @@ static rt_thread_t s_ap_config_thread = RT_NULL;
 #define AP_MODE_IP           "192.168.169.1"
 #define AP_MODE_GATEWAY      "192.168.169.1"
 #define AP_MODE_NETMASK      "255.255.255.0"
+#define AP_MODE_NETDEV_NAME  "w1"
 
 /* WiFi credentials received from web configuration */
 static char s_pending_ssid[32] = {0};
 static char s_pending_password[64] = {0};
 static rt_sem_t s_wifi_connect_sem = RT_NULL;
+
+static rt_err_t ap_mode_config_netdev(void)
+{
+    struct netdev *ap_netdev;
+    ip_addr_t ipaddr;
+    ip_addr_t netmask;
+    ip_addr_t gateway;
+
+    ap_netdev = netdev_get_by_name(AP_MODE_NETDEV_NAME);
+    if (ap_netdev == RT_NULL)
+    {
+        ap_netdev = netdev_get_by_name(RT_WLAN_DEVICE_AP_NAME);
+    }
+    if (ap_netdev == RT_NULL)
+    {
+        LOG_E("AP mode: cannot find netdev %s or %s", AP_MODE_NETDEV_NAME, RT_WLAN_DEVICE_AP_NAME);
+        return -RT_ERROR;
+    }
+
+    if (!ipaddr_aton(AP_MODE_IP, &ipaddr) ||
+        !ipaddr_aton(AP_MODE_NETMASK, &netmask) ||
+        !ipaddr_aton(AP_MODE_GATEWAY, &gateway))
+    {
+        LOG_E("AP mode: invalid static IP configuration");
+        return -RT_ERROR;
+    }
+
+    netdev_dhcp_enabled(ap_netdev, RT_FALSE);
+    netdev_set_ipaddr(ap_netdev, &ipaddr);
+    netdev_set_netmask(ap_netdev, &netmask);
+    netdev_set_gw(ap_netdev, &gateway);
+    netdev_set_default(ap_netdev);
+
+    LOG_I("AP mode: %s static IP set to %s", ap_netdev->name, AP_MODE_IP);
+    return RT_EOK;
+}
 
 static void ap_config_thread_entry(void *parameter)
 {
@@ -649,17 +749,24 @@ static void ap_config_thread_entry(void *parameter)
         if (s_pending_ssid[0] != '\0')
         {
             s_ap_state = AP_MODE_CONNECTING;
+            network_set_state(NETWORK_STATE_CONNECTING);
 
-            /* Stop AP mode */
+            /* Stop AP mode and give WHD/lwIP time to release the AP interface. */
             LOG_I("AP mode: user configured WiFi, connecting to: %s", s_pending_ssid);
+            rt_wlan_ap_stop();
+            rt_thread_mdelay(1000);
             rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
-
-            /* Disconnect from AP first */
-            rt_wlan_disconnect();
             rt_thread_mdelay(500);
 
+            /* Restore STA mode after AP stops, then disconnect stale STA state before joining. */
+            rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
+            rt_thread_mdelay(1500);
+            rt_wlan_disconnect();
+            rt_thread_mdelay(1000);
+            rt_wlan_config_autoreconnect(RT_TRUE);
+
             /* Connect to user WiFi */
-            if (rt_wlan_connect(s_pending_ssid, s_pending_password) == RT_EOK)
+            if (network_start_sta_connect_with_retry(s_pending_ssid, s_pending_password, 5) == RT_EOK)
             {
                 LOG_I("AP mode: WiFi connection initiated");
                 /* Wait for connection */
@@ -668,16 +775,24 @@ static void ap_config_thread_entry(void *parameter)
                 if (rt_wlan_is_ready())
                 {
                     /* Save configuration to Flash */
-                    common_config_set_string(CFG_KEY_WIFI_SSID, s_pending_ssid);
-                    common_config_set_string(CFG_KEY_WIFI_PASS, s_pending_password);
+                    common_config_set_str(CFG_KEY_WIFI_SSID, s_pending_ssid);
+                    common_config_set_str(CFG_KEY_WIFI_PASS, s_pending_password);
 
                     s_ap_state = AP_MODE_SUCCESS;
+                    network_set_sta_default_netdev();
+                    common_network_configure(s_pending_ssid, s_pending_password);
+                    s_network.is_ready = RT_TRUE;
+                    network_set_state(NETWORK_STATE_CONNECTED);
+                    rt_wlan_config_autoreconnect(RT_TRUE);
                     LOG_I("AP mode: WiFi connected successfully!");
                     common_network_ap_connect_success();
                 }
                 else
                 {
                     s_ap_state = AP_MODE_FAILED;
+                    s_network.is_ready = RT_FALSE;
+                    network_set_state(NETWORK_STATE_ERROR);
+                    rt_wlan_config_autoreconnect(RT_TRUE);
                     LOG_W("AP mode: WiFi connection failed");
                     common_network_ap_connect_failed();
                 }
@@ -685,6 +800,9 @@ static void ap_config_thread_entry(void *parameter)
             else
             {
                 s_ap_state = AP_MODE_FAILED;
+                s_network.is_ready = RT_FALSE;
+                network_set_state(NETWORK_STATE_ERROR);
+                rt_wlan_config_autoreconnect(RT_TRUE);
                 LOG_E("AP mode: failed to start WiFi connection");
                 common_network_ap_connect_failed();
             }
@@ -722,10 +840,19 @@ int common_network_start_ap_mode(void)
     rt_wlan_config_autoreconnect(RT_FALSE);
 
     /* Set AP mode */
-    if (rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_AP) != RT_EOK)
+    if (rt_wlan_set_mode(RT_WLAN_DEVICE_AP_NAME, RT_WLAN_AP) != RT_EOK)
     {
         LOG_E("AP mode: failed to set AP mode");
         rt_sem_delete(s_wifi_connect_sem);
+        s_wifi_connect_sem = RT_NULL;
+        return -RT_ERROR;
+    }
+
+    if (ap_mode_config_netdev() != RT_EOK)
+    {
+        rt_wlan_set_mode(RT_WLAN_DEVICE_AP_NAME, RT_WLAN_STATION);
+        rt_sem_delete(s_wifi_connect_sem);
+        s_wifi_connect_sem = RT_NULL;
         return -RT_ERROR;
     }
 
@@ -733,12 +860,14 @@ int common_network_start_ap_mode(void)
     if (rt_wlan_start_ap(AP_MODE_SSID_PREFIX, AP_MODE_PASSWORD) != RT_EOK)
     {
         LOG_E("AP mode: failed to start AP");
-        rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
+        rt_wlan_set_mode(RT_WLAN_DEVICE_AP_NAME, RT_WLAN_STATION);
         rt_sem_delete(s_wifi_connect_sem);
+        s_wifi_connect_sem = RT_NULL;
         return -RT_ERROR;
     }
 
     s_ap_state = AP_MODE_ACTIVE;
+    network_set_state(NETWORK_STATE_CONNECTING);
     LOG_I("AP mode: started - SSID: %s, Password: %s", AP_MODE_SSID_PREFIX, AP_MODE_PASSWORD);
     LOG_I("AP mode: connect to http://%s in browser", AP_MODE_IP);
 
@@ -756,9 +885,10 @@ int common_network_start_ap_mode(void)
     else
     {
         LOG_E("AP mode: failed to create config thread");
-        rt_wlan_stop_ap();
-        rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
+        rt_wlan_ap_stop();
+        rt_wlan_set_mode(RT_WLAN_DEVICE_AP_NAME, RT_WLAN_STATION);
         rt_sem_delete(s_wifi_connect_sem);
+        s_wifi_connect_sem = RT_NULL;
         s_ap_state = AP_MODE_INACTIVE;
         return -RT_ENOMEM;
     }
@@ -788,7 +918,7 @@ int common_network_stop_ap_mode(void)
     }
 
     /* Stop AP */
-    rt_wlan_stop_ap();
+    rt_wlan_ap_stop();
 
     /* Switch back to STA mode */
     rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);

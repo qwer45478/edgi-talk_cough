@@ -8,8 +8,10 @@
 
 #include "voice_assistant.h"
 #include "../common/common_audio_capture.h"
+#include "../common/common_key.h"
+#include "../cough_ui/cough_ui.h"
 #include "xiaozhi/xiaozhi.h"
-#include "xiaozhi/xiaozhi_ui.h"
+#include "xiaozhi_ui.h"
 
 #define DBG_TAG "voice_asst"
 #define DBG_LVL DBG_INFO
@@ -18,10 +20,32 @@
 /* 外部函数声明 */
 extern int ws_xiaozhi_init(void);
 extern void xiaozhi_ui_init(void);
+extern int voice_assistant_motion_init(void);
+
+static void voice_assistant_key_callback(common_key_event_t event, void *user_data)
+{
+    RT_UNUSED(user_data);
+
+    if (event == COMMON_KEY_EVENT_CLICK || event == COMMON_KEY_EVENT_LONG_PRESS)
+    {
+        LOG_I("key toggles UI navigation menu");
+        cough_ui_nav_toggle();
+    }
+}
 
 int voice_assistant_init(void)
 {
     LOG_I("Initializing Voice Assistant...");
+
+    /* Initialize the shared key service before Xiaozhi creates its event thread. */
+    if (common_key_init() == RT_EOK)
+    {
+        common_key_register_callback(voice_assistant_key_callback, RT_NULL);
+    }
+    else
+    {
+        LOG_W("Failed to initialize common key service, key trigger disabled");
+    }
 
     /* 1. 初始化公共音频采集模块（资源仲裁） */
     if (common_audio_capture_init() != RT_EOK)
@@ -40,6 +64,9 @@ int voice_assistant_init(void)
         LOG_E("Failed to initialize xiaozhi main thread!");
         return -RT_ERROR;
     }
+
+    /* Start gesture trigger; it exits quietly if IMU is unavailable. */
+    voice_assistant_motion_init();
 
     LOG_I("Voice Assistant initialized successfully");
     return RT_EOK;

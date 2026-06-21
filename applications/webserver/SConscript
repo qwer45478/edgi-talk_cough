@@ -2,6 +2,6 @@ from building import *
 
 cwd = GetCurrentDir()
 src = Glob('*.c')
-group = DefineGroup('webserver', src)
+group = DefineGroup('webserver', src, depend=[''])
 
 Return('group')

@@ -125,25 +125,25 @@ void clean_info(void);
  * @brief Legacy function: Update chat status
  * @deprecated Use xiaozhi_ui_set_status() instead
  */
-void xiaozhi_ui_chat_status(char *string);
+void xiaozhi_ui_chat_status(const char *string);
 
 /**
  * @brief Legacy function: Update chat output
  * @deprecated Use xiaozhi_ui_set_output() instead
  */
-void xiaozhi_ui_chat_output(char *string);
+void xiaozhi_ui_chat_output(const char *string);
 
 /**
  * @brief Legacy function: Update emoji display
  * @deprecated Use xiaozhi_ui_set_emoji() instead
  */
-void xiaozhi_ui_update_emoji(char *string);
+void xiaozhi_ui_update_emoji(const char *string);
 
 /**
  * @brief Legacy function: Update ADC display
  * @deprecated Use xiaozhi_ui_set_adc() instead
  */
-void xiaozhi_ui_update_adc(char *string);
+void xiaozhi_ui_update_adc(const char *string);
 
 #ifdef __cplusplus
 }

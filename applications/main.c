@@ -16,6 +16,7 @@
 #include "common/common_env.h"
 #include "common/common_storage.h"
 #include "common/common_config.h"
+#include "common/common_network.h"
 #include "cough_detect/cough_detect.h"
 #include "cough_ui/cough_ui.h"
 #include "voice_assistant/voice_assistant.h"  // @yyc add
@@ -93,7 +94,12 @@ int main(void)
      * Must be called AFTER cough_detect_init() which initializes remind/stat. */
     common_config_load_all();
 
-    /* Start periodic UI refresh (env + stats ùù display) */
+if (common_network_is_ready() && !common_network_ntp_is_synced())
+    {
+        cough_detect_send_event(CD_EVENT_NTP_SYNC);
+    }
+
+    /* Start periodic UI refresh (env + stats display) */
     rt_timer_init(&s_ui_refresh_timer, "ui_rfsh",
                   ui_refresh_callback, RT_NULL,
                   rt_tick_from_millisecond(UI_REFRESH_INTERVAL_MS),

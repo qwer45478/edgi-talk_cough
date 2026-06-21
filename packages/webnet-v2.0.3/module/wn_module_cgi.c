@@ -99,6 +99,22 @@ int webnet_module_cgi(struct webnet_session* session, int event)
         RT_ASSERT(session != RT_NULL);
         request = session->request;
         RT_ASSERT(request != RT_NULL);
+        /* Let captive-portal users open the configuration page by IP root. */
+        if ((strcmp(request->path, "/") == 0) ||
+            (strcasecmp(request->path, "/index.html") == 0) ||
+            (strcasecmp(request->path, "/index.htm") == 0))
+        {
+            rt_uint32_t index;
+            for (index = 0; index < _cgi_count; index++)
+            {
+                if (strcasecmp(_cgi_items[index].name, "index") == 0)
+                {
+                    _cgi_items[index].handler(session);
+                    return WEBNET_MODULE_FINISHED;
+                }
+            }
+        }
+
         /* check whether a cgi request */
         cgi_path = strstr(request->path, _cgi_root);
         if (cgi_path != RT_NULL)

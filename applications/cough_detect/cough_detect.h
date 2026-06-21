@@ -93,6 +93,13 @@ float cough_detect_get_baseline(void);
 void cough_detect_send_event(rt_uint32_t event_set);
 
 /**
+ * Temporarily pause/resume microphone capture for another audio user.
+ * The detection state and statistics are preserved while paused.
+ */
+void cough_detect_pause(void);
+void cough_detect_resume(void);
+
+/**
  * Dynamically update the cough confidence threshold (0.0–1.0).
  * Usually called from common_config when loading persisted settings.
  */

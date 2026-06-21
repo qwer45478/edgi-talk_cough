@@ -20,7 +20,9 @@
 
 #include "cough_ui.h"
 #include "cough_ui_pages.h"
+#include "page_xiaozhi.h"
 #include "../cough_detect/cough_stat.h"
+#include "../common/common_network.h"
 
 /* ── Thread parameters ────────────────────────────────────────────── */
 #define UI_THREAD_STACK     (1024 * 16)
@@ -28,7 +30,7 @@
 #define UI_THREAD_TICK      10
 
 /* ── Message queue ──────────────────────────────────────────────── */
-#define UI_MSG_DATA_SIZE    64
+#define UI_MSG_DATA_SIZE    128
 #define UI_MSG_POOL_SIZE    16
 
 /* ── Navbar auto-hide ──────────────────────────────────────────── */
@@ -46,6 +48,11 @@ typedef enum
     UI_CMD_UPDATE_STATS,
     UI_CMD_NAV_TOGGLE,
     UI_CMD_NAV_GOTO,
+    UI_CMD_NETWORK_CHANGED,
+    UI_CMD_XZ_STATUS,
+    UI_CMD_XZ_OUTPUT,
+    UI_CMD_XZ_EMOJI,
+    UI_CMD_XZ_CLEAR,
 } ui_cmd_t;
 
 typedef struct
@@ -75,9 +82,11 @@ static rt_bool_t s_navbar_visible = RT_FALSE;
 static rt_tick_t s_navbar_last_touch = 0;
 static int       s_current_page   = UI_PAGE_HOME;
 
+
 extern void lv_port_disp_init(void);
 extern void lv_port_indev_init(void);
 extern void lv_port_disp_test_red(void);
+extern void xiaozhi_trigger_toggle(void);
 
 /* ── Page titles & icons ────────────────────────────────────────── */
 static const char *s_page_titles[UI_PAGE_COUNT] = {
@@ -86,6 +95,7 @@ static const char *s_page_titles[UI_PAGE_COUNT] = {
     LV_SYMBOL_BELL  "  Reminders",
     LV_SYMBOL_SETTINGS "  Settings",
     LV_SYMBOL_DUMMY "  About",
+    LV_SYMBOL_AUDIO "  Xiaozhi AI",
 };
 
 static const char *s_nav_icons[UI_PAGE_COUNT] = {
@@ -94,6 +104,7 @@ static const char *s_nav_icons[UI_PAGE_COUNT] = {
     LV_SYMBOL_BELL,
     LV_SYMBOL_SETTINGS,
     LV_SYMBOL_DUMMY,
+    LV_SYMBOL_AUDIO,
 };
 
 static const char *s_nav_texts[UI_PAGE_COUNT] = {
@@ -102,6 +113,7 @@ static const char *s_nav_texts[UI_PAGE_COUNT] = {
     "Remind",
     "Setting",
     "About",
+    "AI",
 };
 
 /* ── Shared helper: create card ─────────────────────────────────── */
@@ -130,6 +142,8 @@ lv_obj_t *ui_create_section_label(lv_obj_t *parent, const char *text)
 }
 
 /* ── message send helper ────────────────────────────────────────── */
+static void network_status_callback(common_network_state_t state);
+
 static void ui_send(ui_cmd_t cmd, const char *text)
 {
     ui_msg_t msg;
@@ -287,12 +301,13 @@ static void ui_build_tileview(lv_obj_t *scr)
     lv_obj_set_style_bg_color(s_tileview, lv_color_hex(CLR_BG_DARK), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_tileview, LV_OPA_COVER, LV_PART_MAIN);
 
-    /* Add 5 horizontal tiles */
+    /* Add horizontal tiles */
     s_tiles[0] = lv_tileview_add_tile(s_tileview, 0, 0, LV_DIR_RIGHT);
     s_tiles[1] = lv_tileview_add_tile(s_tileview, 1, 0, LV_DIR_LEFT | LV_DIR_RIGHT);
     s_tiles[2] = lv_tileview_add_tile(s_tileview, 2, 0, LV_DIR_LEFT | LV_DIR_RIGHT);
     s_tiles[3] = lv_tileview_add_tile(s_tileview, 3, 0, LV_DIR_LEFT | LV_DIR_RIGHT);
-    s_tiles[4] = lv_tileview_add_tile(s_tileview, 4, 0, LV_DIR_LEFT);
+    s_tiles[4] = lv_tileview_add_tile(s_tileview, 4, 0, LV_DIR_LEFT | LV_DIR_RIGHT);
+    s_tiles[5] = lv_tileview_add_tile(s_tileview, 5, 0, LV_DIR_LEFT);
 
     /* Style each tile */
     for (int i = 0; i < UI_PAGE_COUNT; i++)
@@ -308,6 +323,7 @@ static void ui_build_tileview(lv_obj_t *scr)
     page_remind_create(s_tiles[2]);
     page_settings_create(s_tiles[3]);
     page_about_create(s_tiles[4]);
+    page_xiaozhi_create(s_tiles[5]);
 
     /* Listen for tile change events */
     lv_obj_add_event_cb(s_tileview, tileview_change_cb, LV_EVENT_VALUE_CHANGED, RT_NULL);
@@ -430,6 +446,41 @@ static void ui_handle_stats(const char *data)
 }
 
 /* ── Message dispatcher ─────────────────────────────────────────── */
+static void ui_handle_network_changed(void)
+{
+    const common_network_t *net = common_network_get();
+    if (!net)
+    {
+        return;
+    }
+
+    switch (net->state)
+    {
+    case NETWORK_STATE_CONNECTED:
+        ui_handle_state("WiFi OK");
+        break;
+    case NETWORK_STATE_CONNECTING:
+        if (common_network_get_ap_state() == AP_MODE_ACTIVE)
+            ui_handle_state("AP CONFIG");
+        else
+            ui_handle_state("WiFi...");
+        break;
+    case NETWORK_STATE_ERROR:
+        ui_handle_state("WiFi ERR");
+        break;
+    default:
+        ui_handle_state("WiFi OFF");
+        break;
+    }
+
+    page_settings_update_network();
+}
+
+static void network_status_callback(common_network_state_t state)
+{
+    RT_UNUSED(state);
+    ui_send(UI_CMD_NETWORK_CHANGED, RT_NULL);
+}
 static void ui_process_message(const ui_msg_t *msg)
 {
     if (!msg) return;
@@ -485,6 +536,26 @@ static void ui_process_message(const ui_msg_t *msg)
         break;
     }
 
+    case UI_CMD_NETWORK_CHANGED:
+        ui_handle_network_changed();
+        break;
+
+    case UI_CMD_XZ_STATUS:
+        page_xiaozhi_set_status(msg->data);
+        break;
+
+    case UI_CMD_XZ_OUTPUT:
+        page_xiaozhi_set_output(msg->data);
+        break;
+
+    case UI_CMD_XZ_EMOJI:
+        page_xiaozhi_set_emoji(msg->data);
+        break;
+
+    case UI_CMD_XZ_CLEAR:
+        page_xiaozhi_clear_output();
+        break;
+
     default:
         break;
     }
@@ -520,6 +591,7 @@ static void ui_thread_entry(void *args)
     ui_build();
 
     LOG_I("UI init complete, entering main loop");
+    common_network_set_status_callback(network_status_callback);
     rt_sem_release(&s_ui_ready_sem);
 
     while (1)
@@ -607,6 +679,26 @@ void cough_ui_update_stats(rt_uint32_t total, rt_uint32_t day,
                 (unsigned long)total, (unsigned long)day,
                 (unsigned long)night, (unsigned long)bursts);
     ui_send(UI_CMD_UPDATE_STATS, tmp);
+}
+
+void cough_ui_xiaozhi_set_status(const char *status)
+{
+    ui_send(UI_CMD_XZ_STATUS, status ? status : "Idle");
+}
+
+void cough_ui_xiaozhi_set_output(const char *output)
+{
+    ui_send(UI_CMD_XZ_OUTPUT, output ? output : " ");
+}
+
+void cough_ui_xiaozhi_set_emoji(const char *emoji)
+{
+    ui_send(UI_CMD_XZ_EMOJI, emoji ? emoji : "--");
+}
+
+void cough_ui_xiaozhi_clear(void)
+{
+    ui_send(UI_CMD_XZ_CLEAR, RT_NULL);
 }
 
 void cough_ui_nav_toggle(void)

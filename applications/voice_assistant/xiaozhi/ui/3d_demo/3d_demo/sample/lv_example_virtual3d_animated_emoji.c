@@ -5,8 +5,10 @@
 
 #include "lvgl.h"
 #include <stdio.h>  
+#include <math.h>
 #include "lx_resource.h"
 #include "lv_example_virtual3d_animated_emoji.h"   
+#include "lv_virtual3d.h"
 
 #include "lv_font.h"
 
@@ -131,7 +133,7 @@ static bool emoji_popup_mode = false;
 static lv_obj_t** emoji_visible_obj_list = NULL;
 static uint32_t emoji_visible_obj_count = 0;
 static lv_obj_t *emoji_snapshot_img = NULL;
-static lv_img_dsc_t *emoji_snapshot_dsc = NULL;
+static lv_draw_buf_t *emoji_snapshot_dsc = NULL;
 
 static lx_vglite_model_t CURR_MODEL = { 0 };
 
@@ -203,7 +205,7 @@ static const lv_image_dsc_t * icon_group[] =
 };
 
 
-static lx_action_cfg_item_t lx_action_cfg_table[] =
+static const lx_action_cfg_item_t lx_action_cfg_table[] =
 {
     {"follow",
         0, 1, -1, -1, -1, 0, 0, 0, 0, 0x00000000, EMOJI_BASE_COLOR, 0xffffffff, 0xffffffff, 0xffffffff},//跟随
@@ -1330,7 +1332,11 @@ static void emoji_screenshot_replace_popup_bg(void)
 	v.num = (int32_t)175;
 	lv_obj_set_local_style_prop(popup_bg, LV_STYLE_RADIUS, v, LV_PART_MAIN|LV_STATE_DEFAULT);  
 
+#if LV_USE_SNAPSHOT
     emoji_snapshot_dsc = lv_snapshot_take(scr, LV_COLOR_FORMAT_ARGB8888);
+#else
+    emoji_snapshot_dsc = NULL;
+#endif
 
     lv_obj_delete(popup_mask);
     lv_obj_delete(popup_bg);
@@ -1338,7 +1344,7 @@ static void emoji_screenshot_replace_popup_bg(void)
     emoji_hide_screen_visible_objs();
 
     if(!emoji_snapshot_dsc) {
-        LOG_E_WARN("Failed to take screenshot");
+        LOG_W("Failed to take screenshot");
         return;
     }
 
@@ -1532,7 +1538,7 @@ static uint32_t virtual3d_user_callback(uint16_t cmd, uint32_t param, uint32_t u
         case LX_CMD_ID_GET_MODEL:    
 
             LOG_D(" LX_VGWIDGET_INS_EMOJI_ANIMATION ->LX_CMD_ID_GET_MODEL  (uint16_t)param:%d",(uint16_t)param);
-            return get_model((uint16_t)param);
+            return (uint32_t)(uintptr_t)get_model((uint16_t)param);
 
         case LX_CMD_ID_FREE_MODEL:
             LOG_D(" LX_VGWIDGET_INS_EMOJI_ANIMATION ->LX_CMD_ID_FREE_MODEL  (uint16_t)param:%d",(uint16_t)param);

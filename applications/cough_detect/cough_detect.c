@@ -30,6 +30,8 @@ void cloud_upload_reminders(void);  /* @yyc Upload reminders to cloud */
 
 /* High-rate inference logs can flood UART; keep disabled by default. */
 #define CD_STREAM_LOG_ENABLE 0
+#define CD_UI_LEVEL_INTERVAL_MS 100
+#define CD_MIC_YIELD_INTERVAL_MS 200
 
 /* Periodic upload interval (10 minutes) */
 #define CD_UPLOAD_INTERVAL_MS   (10 * 60 * 1000)
@@ -53,11 +55,25 @@ static rt_mutex_t s_ring_mutex = RT_NULL;
 static cd_state_t   s_state    = CD_STATE_IDLE;
 static float        s_baseline = 0.0f;
 static rt_event_t   s_event    = RT_NULL;
+static volatile rt_bool_t s_paused = RT_FALSE;
 
 void cough_detect_send_event(rt_uint32_t event_set)
 {
     if (s_event != RT_NULL)
         rt_event_send(s_event, event_set);
+}
+void cough_detect_pause(void)
+{
+    s_paused = RT_TRUE;
+}
+
+void cough_detect_resume(void)
+{
+    if (s_paused)
+    {
+        s_paused = RT_FALSE;
+        LOG_I("Cough detection microphone resumed");
+    }
 }
 static rt_device_t  s_mic_dev  = RT_NULL;
 static rt_tick_t    s_last_ui_tick = 0;
@@ -76,22 +92,37 @@ static float frame_energy(const int16_t *samples, uint32_t n)
     return sum / (float)n;
 }
 
-static rt_uint16_t frame_peak_abs(const int16_t *samples, uint32_t n)
+static rt_uint16_t frame_rms_scaled(const int16_t *samples, uint32_t n)
 {
-    rt_uint16_t peak = 0;
+    uint64_t sum = 0;
+
     for (uint32_t i = 0; i < n; i++)
     {
         int32_t v = samples[i];
-        if (v < 0)
-        {
-            v = -v;
-        }
-        if ((rt_uint16_t)v > peak)
-        {
-            peak = (rt_uint16_t)v;
-        }
+        sum += (uint32_t)(v * v);
     }
-    return peak;
+
+    /* Avoid sqrtf in the hot path. This approximates RMS for stable UI display. */
+    uint32_t mean = (uint32_t)(sum / n);
+    uint32_t rms = 0;
+    uint32_t bit = 1UL << 30;
+    while (bit > mean) bit >>= 2;
+    while (bit != 0)
+    {
+        if (mean >= rms + bit)
+        {
+            mean -= rms + bit;
+            rms = (rms >> 1) + bit;
+        }
+        else
+        {
+            rms >>= 1;
+        }
+        bit >>= 2;
+    }
+
+    rms *= 4;
+    return (rms > 20000U) ? 20000U : (rt_uint16_t)rms;
 }
 
 /* === Button ISR - disabled, reserved for xiaozhi SDK === */
@@ -112,23 +143,35 @@ static rt_uint16_t frame_peak_abs(const int16_t *samples, uint32_t n)
 static void mic_thread_entry(void *param)
 {
     int16_t frame[CD_FRAME_SAMPLES];
+    rt_bool_t mic_open = RT_FALSE;
+    rt_tick_t last_yield_tick = rt_tick_get();
+    rt_uint16_t ui_level = 0;
+
+    (void)param;
 
     while (1)
     {
-        /* @yyc add: 请求独占使用麦克风（语音助手优先）
-         * 我们只在需要读取时才请求，完成后立即释放
-         * 这样语音助手可以在间隙中获取麦克风 */
-        if (common_audio_capture_request_exclusive(AUDIO_USER_COUGH_DETECT) != RT_EOK)
+        if (s_paused)
         {
-            /* 获取不到，语音助手正在使用，等待后重试 */
-            rt_thread_mdelay(10);
+            if (mic_open)
+            {
+                rt_device_close(s_mic_dev);
+                common_audio_capture_release_exclusive(AUDIO_USER_COUGH_DETECT);
+                mic_open = RT_FALSE;
+                LOG_I("Cough detection microphone paused");
+            }
+            rt_thread_mdelay(20);
             continue;
         }
 
-        /* 确保设备已打开（首次需要打开） */
-        if (s_mic_dev != RT_NULL)
+        if (!mic_open)
         {
-            /* 配置音频参数 */
+            if (common_audio_capture_request_exclusive(AUDIO_USER_COUGH_DETECT) != RT_EOK)
+            {
+                rt_thread_mdelay(20);
+                continue;
+            }
+
             struct rt_audio_caps mic_cfg;
             mic_cfg.main_type      = AUDIO_TYPE_MIXER;
             mic_cfg.sub_type       = AUDIO_MIXER_VOLUME;
@@ -137,30 +180,22 @@ static void mic_thread_entry(void *param)
 
             if (rt_device_open(s_mic_dev, RT_DEVICE_OFLAG_RDONLY) != RT_EOK)
             {
-                /* 设备可能被语音助手占用，重试 */
                 common_audio_capture_release_exclusive(AUDIO_USER_COUGH_DETECT);
-                rt_thread_mdelay(10);
+                rt_thread_mdelay(20);
                 continue;
             }
+
+            mic_open = RT_TRUE;
+            last_yield_tick = rt_tick_get();
         }
 
-        /* Block until one frame is available from the PDM driver */
         rt_size_t bytes = rt_device_read(s_mic_dev, 0, frame, CD_FRAME_BYTES);
-
-        /* @yyc add: 关闭设备并释放独占，让语音助手有机会获取 */
-        if (s_mic_dev != RT_NULL)
-        {
-            rt_device_close(s_mic_dev);
-        }
-        common_audio_capture_release_exclusive(AUDIO_USER_COUGH_DETECT);
-
         if (bytes != CD_FRAME_BYTES)
         {
             rt_thread_mdelay(1);
             continue;
         }
 
-        /* Push frame into the ring buffer */
         rt_mutex_take(s_ring_mutex, RT_WAITING_FOREVER);
         for (int i = 0; i < CD_FRAME_SAMPLES; i++)
         {
@@ -169,22 +204,32 @@ static void mic_thread_entry(void *param)
         }
         rt_mutex_release(s_ring_mutex);
 
-        /* Feed audio to recorder if post-trigger capture is active */
         if (cough_record_get_state() == RECORD_STATE_POST_CAPTURE)
         {
             cough_record_feed(frame, CD_FRAME_SAMPLES);
         }
 
         rt_tick_t now = rt_tick_get();
-        rt_uint16_t peak = frame_peak_abs(frame, CD_FRAME_SAMPLES);
-        if ((now - s_last_ui_tick) >= rt_tick_from_millisecond(50))
+        rt_uint16_t level = frame_rms_scaled(frame, CD_FRAME_SAMPLES);
+        ui_level = (rt_uint16_t)((ui_level * 3U + level) / 4U);
+
+        if ((now - s_last_ui_tick) >= rt_tick_from_millisecond(CD_UI_LEVEL_INTERVAL_MS))
         {
             s_last_ui_tick = now;
-            cough_ui_push_level(peak);
+            cough_ui_push_level(ui_level);
+        }
+
+        /* Let the voice assistant obtain the microphone without reopening the
+         * device for every 10 ms cough-detection frame. */
+        if ((now - last_yield_tick) >= rt_tick_from_millisecond(CD_MIC_YIELD_INTERVAL_MS))
+        {
+            rt_device_close(s_mic_dev);
+            common_audio_capture_release_exclusive(AUDIO_USER_COUGH_DETECT);
+            mic_open = RT_FALSE;
+            rt_thread_mdelay(2);
         }
     }
 }
-
 /* === Inference thread - accumulates audio, runs feature extraction + */
 /*   TFLite Micro classifier when energy gate is triggered. === */
 
@@ -261,7 +306,7 @@ static void infer_thread_entry(void *param)
 
     while (1)
     {
-        /* @yyc add: 如果语音助手活跃，跳过推理
+/* @yyc add: 如果语音助手活跃，跳过推理
          * 让语音助手独占麦克风资源 */
         // TODO: @yyc Will be re-enabled after xiaozhi SDK integration
         // if (voice_is_active())
@@ -471,7 +516,7 @@ static void control_thread_entry(void *param)
         /* [Event] Periodic stats upload (from timer) */
         if (recv & CD_EVENT_UPLOAD_TICK)
         {
-            if (common_network_is_ready())
+            if (common_network_is_ready() && common_network_has_server())
             {
                 /* @yyc Cloud upload: heartbeat + env + events + stats */
                 cloud_upload_heartbeat();
@@ -524,11 +569,19 @@ static void control_thread_entry(void *param)
             int ret = common_network_ntp_sync();
             if (ret == RT_EOK)
             {
-                /* @yyc After NTP sync: fetch cloud config, check OTA, sync reminders */
-                cloud_fetch_config();
-                cloud_check_ota();
-                cloud_fetch_reminders();   /* @yyc Fetch reminders from cloud */
-                cloud_upload_reminders();   /* @yyc Upload local reminders to cloud */
+                if (common_network_has_server())
+                {
+                    /* @yyc After NTP sync: fetch cloud config, check OTA, sync reminders */
+                    cloud_fetch_config();
+                    cloud_check_ota();
+                    cloud_fetch_reminders();   /* @yyc Fetch reminders from cloud */
+                    cloud_upload_reminders();   /* @yyc Upload local reminders to cloud */
+                }
+                else
+                {
+                    LOG_I("Cloud server not configured, skip cloud sync");
+                    cough_remind_apply_defaults();
+                }
             }
             else
             {

@@ -134,6 +134,12 @@ static const struct rt_rtc_ops _rtc_ops =
 
 static int rt_hw_rtc_init(void)
 {
+    if (rt_device_find("rtc") != RT_NULL)
+    {
+        LOG_W("RTC device already registered, skip hardware RTC");
+        return RT_EOK;
+    }
+
     ifx32_rtc_dev.ops = &_rtc_ops;
 
     if (rt_hw_rtc_register(&ifx32_rtc_dev, "rtc", RT_DEVICE_FLAG_RDWR, RT_NULL) != RT_EOK)

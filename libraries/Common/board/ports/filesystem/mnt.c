@@ -2,6 +2,7 @@
 
 #ifdef RT_USING_DFS
 #include <dfs_fs.h>
+#include <dfs_posix.h>
 #ifdef BSP_USING_FLASH
 #include <fal.h>
 #endif
@@ -11,7 +12,7 @@
 #define DBG_TAG "app.filesystem"
 #define DBG_LVL DBG_INFO
 #include <rtdbg.h>
-#ifndef BSP_USING_XiaoZhi
+
 static const struct romfs_dirent _romfs_root[] =
 {
 #ifdef BSP_USING_FLASH
@@ -26,7 +27,6 @@ const struct romfs_dirent romfs_root =
 {
     ROMFS_DIRENT_DIR, "/", (rt_uint8_t *)_romfs_root, sizeof(_romfs_root) / sizeof(_romfs_root[0])
 };
-#endif
 
 static void _sdcard_mount(void)
 {
@@ -34,6 +34,8 @@ static void _sdcard_mount(void)
     rt_device_t device;
     const char *sd_device_names[] = {"sd", "sd0", "sd1", "sd2"};
     int i;
+    int ret;
+    int attempt;
     const char *device_name = RT_NULL;
 
     /* Try to find SD card device */
@@ -78,34 +80,51 @@ static void _sdcard_mount(void)
         return;
     }
 
-    rt_thread_mdelay(200);
+    rt_thread_mdelay(500);
 
-    /* Try to mount */
-    if (dfs_mount(device_name, "/sdcard", "elm", 0, 0) == RT_EOK)
+    if (access("/sdcard", 0) != 0)
     {
-        LOG_I("sd card mount to '/sdcard' success!");
-        return;
+        ret = mkdir("/sdcard", 0);
+        if (ret != 0 && access("/sdcard", 0) != 0)
+        {
+            LOG_W("create /sdcard mount point failed: %d, try mounting anyway", ret);
+        }
+    }
+
+    for (attempt = 0; attempt < 3; attempt++)
+    {
+        ret = dfs_mount(device_name, "/sdcard", "elm", 0, 0);
+        if (ret == RT_EOK)
+        {
+            LOG_I("sd card mount to '/sdcard' success!");
+            return;
+        }
+
+        LOG_W("sd card mount to '/sdcard' failed: %d (attempt %d)", ret, attempt + 1);
+        rt_thread_mdelay(300);
     }
 
     /* Mount failed, try to format */
     LOG_W("sd card mount to '/sdcard' failed, try to mkfs...");
-    if (dfs_mkfs("elm", device_name) == 0)
+    ret = dfs_mkfs("elm", device_name);
+    if (ret == 0)
     {
         LOG_I("sd card mkfs success!");
 
         /* Try to mount again after formatting */
-        if (dfs_mount(device_name, "/sdcard", "elm", 0, 0) == RT_EOK)
+        ret = dfs_mount(device_name, "/sdcard", "elm", 0, 0);
+        if (ret == RT_EOK)
         {
             LOG_I("sd card mount to '/sdcard' success!");
         }
         else
         {
-            LOG_E("sd card mount to '/sdcard' failed after mkfs!");
+            LOG_E("sd card mount to '/sdcard' failed after mkfs: %d", ret);
         }
     }
     else
     {
-        LOG_E("sd card mkfs failed!");
+        LOG_E("sd card mkfs failed: %d", ret);
     }
 #endif /* BSP_USING_SDCARD */
 }
@@ -122,6 +141,12 @@ static void _fal_mount(void)
     else
     {
         LOG_I("Block device created for filesystem");
+
+#ifdef PKG_USING_LITTLEFS
+        if (access("/flash", 0) != 0)
+        {
+            mkdir("/flash", 0);
+        }
 
         /* Try to mount filesystem */
         if (dfs_mount("filesystem", "/flash", "lfs", 0, 0) != 0)
@@ -154,6 +179,9 @@ static void _fal_mount(void)
         {
             LOG_I("Filesystem mounted successfully");
         }
+#else
+        LOG_W("littlefs is not enabled, skip mounting /flash");
+#endif
     }
 }
 #endif /* BSP_USING_FLASH */

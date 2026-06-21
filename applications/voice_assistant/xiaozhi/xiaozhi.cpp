@@ -16,8 +16,10 @@
 #include <webclient.h>
 #include <wavplayer.h>
 #include <string.h>
+#include "../../common/common_network.h"
 
 #define DBG_TAG "xz.ws"
+#define XZ_NET_WAIT_LOG_INTERVAL_MS 30000
 #define DBG_LVL DBG_LOG
 #include <rtdbg.h>
 
@@ -33,6 +35,14 @@
 #define BUTTON_DEBOUNCE_MS 20
 #define WAKEWORD_INIT_FLAG_RESET 0
 #define TTS_SENTENCE_TIMEOUT_MS 6000
+#define XIAOZHI_BACKGROUND_WAKEWORD_ENABLE 0
+#define XIAOZHI_WAKE_SOUND_ENABLE 0
+
+/*
+ * The standalone Xiaozhi 3D emoji renderer is not owned by the cough UI thread.
+ * Calling it from websocket/event threads can race VGLite and crash the system.
+ */
+#define XIAOZHI_3D_EMOJI_ENABLE 0
 
 /* Global application state */
 xiaozhi_app_t g_app =
@@ -58,14 +68,24 @@ xiaozhi_app_t g_app =
 #include "iot/iot_c_api.h"
 #include "mcp/mcp_api.h"
 
+static int xiaozhi_wakeword_start_if_allowed(void)
+{
+#if XIAOZHI_BACKGROUND_WAKEWORD_ENABLE
+    return xz_wakeword_start();
+#else
+    LOG_D("Background wake word is disabled; waiting for key/gesture trigger");
+    return -RT_ERROR;
+#endif
+}
+
 /* Wake word detection callback - optimized for quick response */
 void xz_wakeword_detected_callback(const char *wake_word, float confidence)
 {
     LOG_D("Wake word detected: %s (confidence: %.2f%%)", wake_word, confidence * 100);
 
     /* Update UI to show wake word detection */
-    xiaozhi_ui_chat_status("   唤醒");
-    xiaozhi_ui_chat_output("我在，请说...");
+    xiaozhi_ui_chat_status("Wake");
+    xiaozhi_ui_chat_output("Ready, please speak...");
 
     /* Play wake sound */
     xz_play_wake_sound();
@@ -94,8 +114,8 @@ void xz_wakeword_detected_callback(const char *wake_word, float confidence)
     if (!g_app.ws.is_connected)
     {
         LOG_D("Wake word detected but not connected, initiating connection...");
-        xiaozhi_ui_chat_status("   连接中");
-        xiaozhi_ui_chat_output("正在连接...");
+        xiaozhi_ui_chat_status("Connecting");
+        xiaozhi_ui_chat_output("Connecting...");
         g_app.pending_listen_start = RT_TRUE;
         g_app.pending_play_wake_sound = RT_FALSE;
         reconnect_websocket();
@@ -111,8 +131,8 @@ void xz_wakeword_detected_callback(const char *wake_word, float confidence)
         if (!g_app.ws.is_connected)
         {
             LOG_E("Failed to connect after wake word detection");
-            xiaozhi_ui_chat_status("   连接失败");
-            xiaozhi_ui_chat_output("请稍后再试");
+            xiaozhi_ui_chat_status("Connect failed");
+            xiaozhi_ui_chat_output("Please try later");
             return;
         }
     }
@@ -150,19 +170,19 @@ void xz_wakeword_detected_callback(const char *wake_word, float confidence)
     if (ws_send_listen_start(&g_app.ws.clnt, g_app.ws.session_id, kListeningModeAutoStop))
     {
         /* Update UI */
-        xiaozhi_ui_chat_status("   聆听中");
-        xiaozhi_ui_chat_output("聆听中...");
+        xiaozhi_ui_chat_status("Listening");
+        xiaozhi_ui_chat_output("Listening...");
     }
     else
     {
         LOG_W("Listen start failed after wake word detection");
         g_app.state = kDeviceStateIdle;
         xz_mic(0);
-        xiaozhi_ui_chat_status("   就绪");
-        xiaozhi_ui_chat_output("就绪");
+        xiaozhi_ui_chat_status("Ready");
+        xiaozhi_ui_chat_output("Ready");
         if (!xz_wakeword_is_enabled())
         {
-            xz_wakeword_start();
+            xiaozhi_wakeword_start_if_allowed();
         }
     }
 }
@@ -193,8 +213,8 @@ static void tts_stop_restart_listening(struct rt_work *work, void *work_data)
     /* Try to send listen start */
     if (ws_send_listen_start(&g_app.ws.clnt, g_app.ws.session_id, kListeningModeAutoStop))
     {
-        xiaozhi_ui_chat_status("   聆听中");
-        xiaozhi_ui_chat_output("聆听中...");
+        xiaozhi_ui_chat_status("Listening");
+        xiaozhi_ui_chat_output("Listening...");
     }
     else
     {
@@ -202,8 +222,8 @@ static void tts_stop_restart_listening(struct rt_work *work, void *work_data)
         /* Reset state if failed */
         g_app.state = kDeviceStateIdle;
         xz_mic(0);
-        xiaozhi_ui_chat_status("   就绪");
-        xiaozhi_ui_chat_output("就绪");
+        xiaozhi_ui_chat_status("Ready");
+        xiaozhi_ui_chat_output("Ready");
     }
 }
 
@@ -245,22 +265,22 @@ static void ensure_state_consistency(void)
             /* Multi-turn: try reconnect instead of restarting wake word */
             LOG_D("Multi-turn conversation enabled, attempting to reconnect after disconnection");
             g_app.state = kDeviceStateIdle;
-            xiaozhi_ui_chat_status("   连接中");
-            xiaozhi_ui_chat_output("重新连接中...");
+            xiaozhi_ui_chat_status("Connecting");
+            xiaozhi_ui_chat_output("Reconnecting...");
             reconnect_websocket();
         }
         else
         {
             /* Single-turn: reset to idle and restart wake word */
             g_app.state = kDeviceStateIdle;
-            xiaozhi_ui_chat_status("   就绪");
-            xiaozhi_ui_chat_output("就绪");
+            xiaozhi_ui_chat_status("Ready");
+            xiaozhi_ui_chat_output("Ready");
 
             /* Restart wake word detection after state reset */
             if (!xz_wakeword_is_enabled())
             {
                 LOG_D("Restarting wake word detection after connection loss during listening");
-                xz_wakeword_start();
+                xiaozhi_wakeword_start_if_allowed();
             }
         }
     }
@@ -272,14 +292,14 @@ static void ensure_state_consistency(void)
         xz_speaker(0);
         xz_mic(0);
         g_app.state = kDeviceStateUnknown;
-        xiaozhi_ui_chat_status("   休眠中");
-        xiaozhi_ui_chat_output("等待唤醒");
+        xiaozhi_ui_chat_status("Sleeping");
+        xiaozhi_ui_chat_output("Waiting wake");
 
         /* Keep wake word detection running in sleep mode */
         if (!xz_wakeword_is_enabled())
         {
             LOG_D("Starting wake word detection for sleep mode");
-            xz_wakeword_start();
+            xiaozhi_wakeword_start_if_allowed();
         }
     }
 
@@ -288,14 +308,14 @@ static void ensure_state_consistency(void)
     {
         LOG_D("WebSocket connected with valid session, updating state to Idle\n");
         g_app.state = kDeviceStateIdle;
-        xiaozhi_ui_chat_status("   就绪");
-        xiaozhi_ui_chat_output("就绪");
+        xiaozhi_ui_chat_status("Ready");
+        xiaozhi_ui_chat_output("Ready");
 
         /* Ensure wake word detection is running when going to idle */
         if (!xz_wakeword_is_enabled())
         {
             LOG_D("Starting wake word detection when entering idle state");
-            xz_wakeword_start();
+            xiaozhi_wakeword_start_if_allowed();
         }
     }
 }
@@ -303,17 +323,18 @@ static void ensure_state_consistency(void)
 /* Helper functions */
 char *get_mac_address(void)
 {
+    static char empty_mac[] = "";
     struct netdev *netdev = netdev_get_by_name("w0");
     if (netdev == RT_NULL)
     {
         LOG_E("Cannot find netdev w0");
-        return "";
+        return empty_mac;
     }
 
     if (netdev->hwaddr_len != 6)
     {
         LOG_E("Invalid MAC address length: %d", netdev->hwaddr_len);
-        return "";
+        return empty_mac;
     }
 
     rt_snprintf(g_app.mac_address_string, sizeof(g_app.mac_address_string),
@@ -356,6 +377,11 @@ char *get_client_id(void)
 
 void xz_button_callback(void *arg)
 {
+    if (g_app.button_event == RT_NULL)
+    {
+        return;
+    }
+
     if (CYBSP_BTN_PRESSED == Cy_GPIO_Read(CYBSP_USER_BTN_PORT, CYBSP_USER_BTN_PIN))
     {
         rt_event_send(g_app.button_event, BUTTON_EVENT_PRESSED);
@@ -392,14 +418,22 @@ void xz_event_thread_entry(void *param)
                 if (g_app.websocket_reconnect_flag == 1)
                 {
                     LOG_D("Reconnection already in progress, ignoring button press\n");
-                    xiaozhi_ui_chat_status("   连接中");
-                    xiaozhi_ui_chat_output("仍在连接中...");
+                    xiaozhi_ui_chat_status("Connecting");
+                    xiaozhi_ui_chat_output("Still connecting...");
+                    continue;
+                }
+
+                if (!common_network_is_ready())
+                {
+                    LOG_W("Xiaozhi wake ignored: network is not ready");
+                    xiaozhi_ui_chat_status("Waiting network");
+                    xiaozhi_ui_chat_output("Waiting WiFi...");
                     continue;
                 }
 
                 LOG_D("Device not connected, initiating wake up...\n");
-                xiaozhi_ui_chat_status("   连接中");
-                xiaozhi_ui_chat_output("正在连接小智...");
+                xiaozhi_ui_chat_status("Connecting");
+                xiaozhi_ui_chat_output("Connecting Xiaozhi...");
                 reconnect_websocket();
             }
             else
@@ -423,9 +457,9 @@ void xz_event_thread_entry(void *param)
                     /* Play wake sound for button wake-up */
                     xz_play_wake_sound();
 
-                    xiaozhi_ui_chat_status("   聆听中");
-                    xiaozhi_ui_chat_output("聆听中...");
-#ifdef LX_LITEGFX_VGLITE_ENABLE
+                    xiaozhi_ui_chat_status("Listening");
+                    xiaozhi_ui_chat_output("Listening...");
+#if defined(LX_LITEGFX_VGLITE_ENABLE) && XIAOZHI_3D_EMOJI_ENABLE
                     extern void qday_show_emoji_by_rtt_info(int index);
                     qday_show_emoji_by_rtt_info(100);
 #endif
@@ -438,6 +472,14 @@ void xz_event_thread_entry(void *param)
 
                     /* Use auto-stop mode, let system detect speech end */
                     xz_mic(1);
+                    if (!xz_mic_is_enabled())
+                    {
+                        LOG_W("Microphone unavailable, Xiaozhi listen start cancelled");
+                        g_app.state = kDeviceStateIdle;
+                        xiaozhi_ui_chat_status("Idle");
+                        xiaozhi_ui_chat_output("Mic busy, please try later");
+                        continue;
+                    }
                     ws_send_listen_start(&g_app.ws.clnt, g_app.ws.session_id,
                                          kListeningModeAutoStop);
                 }
@@ -462,12 +504,18 @@ void xz_event_thread_entry(void *param)
             {
                 g_app.state = kDeviceStateListening;
                 xz_mic(1);
+                if (!xz_mic_is_enabled())
+                {
+                    LOG_W("Microphone unavailable, skip multi-turn listen restart");
+                    g_app.state = kDeviceStateIdle;
+                    continue;
+                }
 
                 /* Try to send listen start */
                 if (ws_send_listen_start(&g_app.ws.clnt, g_app.ws.session_id, kListeningModeAutoStop))
                 {
-                    xiaozhi_ui_chat_status("   聆听中");
-                    xiaozhi_ui_chat_output("聆听中...");
+                    xiaozhi_ui_chat_status("Listening");
+                    xiaozhi_ui_chat_output("Listening...");
                     LOG_D("Listen start successful after sentence end timeout");
                 }
                 else
@@ -488,28 +536,95 @@ void xz_event_thread_entry(void *param)
 
 void xz_button_init(void)
 {
-    rt_pin_mode(BUTTON_PIN, PIN_MODE_INPUT_PULLUP);
-    rt_pin_write(BUTTON_PIN, PIN_HIGH);
-    g_app.button_event = rt_event_create("btn_evt", RT_IPC_FLAG_FIFO);
-    RT_ASSERT(g_app.button_event != RT_NULL);
+    if (g_app.button_event == RT_NULL)
+    {
+        g_app.button_event = rt_event_create("btn_evt", RT_IPC_FLAG_FIFO);
+        RT_ASSERT(g_app.button_event != RT_NULL);
+    }
 
-    rt_pin_attach_irq(BUTTON_PIN, PIN_IRQ_MODE_RISING_FALLING,
-                      xz_button_callback, NULL);
-    rt_pin_irq_enable(BUTTON_PIN, RT_TRUE);
-    LOG_D("[Init] Button handler ready\n");
+    LOG_D("[Init] Xiaozhi trigger event ready\n");
 }
 
 void xz_event_init(void)
 {
-    rt_thread_t tid = rt_thread_create("event_thread",
-                                       xz_event_thread_entry,
-                                       RT_NULL, 3 * 1024, 7, 10);
+    static rt_bool_t s_event_thread_started = RT_FALSE;
+    rt_thread_t tid;
+
+    if (s_event_thread_started)
+    {
+        return;
+    }
+
+    xz_button_init();
+    tid = rt_thread_create("event_thread",
+                           xz_event_thread_entry,
+                           RT_NULL, 3 * 1024, 7, 10);
     RT_ASSERT(tid != RT_NULL);
     if (rt_thread_startup(tid) != RT_EOK)
     {
         LOG_E("Button thread startup failed\n");
         return;
     }
+
+    s_event_thread_started = RT_TRUE;
+}
+void xiaozhi_trigger_wake(void)
+{
+    if (g_app.button_event == RT_NULL)
+    {
+        g_app.pending_listen_start = RT_TRUE;
+        g_app.pending_play_wake_sound = RT_TRUE;
+        LOG_W("Xiaozhi trigger event not ready, wake request pending");
+        return;
+    }
+
+    rt_event_send(g_app.button_event, BUTTON_EVENT_PRESSED);
+}
+
+void xiaozhi_trigger_toggle(void)
+{
+    rt_bool_t active = (g_app.state == kDeviceStateListening) ||
+                       (g_app.state == kDeviceStateSpeaking) ||
+                       (xz_mic_is_enabled() != 0);
+
+    if (!active)
+    {
+        xiaozhi_trigger_wake();
+        return;
+    }
+
+    g_app.pending_listen_start = RT_FALSE;
+    g_app.pending_play_wake_sound = RT_FALSE;
+
+    if (g_app.tts_sentence_end_timer)
+    {
+        rt_timer_stop(g_app.tts_sentence_end_timer);
+    }
+
+    if (g_app.state == kDeviceStateSpeaking)
+    {
+        xz_speaker(0);
+    }
+
+    if (xz_mic_is_enabled() || g_app.state == kDeviceStateListening)
+    {
+        xz_mic(0);
+        if (g_app.ws.is_connected && g_app.ws.session_id[0] != '\0')
+        {
+            ws_send_listen_stop(&g_app.ws.clnt, g_app.ws.session_id);
+        }
+    }
+
+    if (xz_wakeword_is_enabled())
+    {
+        xz_wakeword_stop();
+    }
+
+    g_app.state = kDeviceStateIdle;
+    xiaozhi_ui_chat_status("Idle");
+    xiaozhi_ui_chat_output(" ");
+    xiaozhi_ui_update_emoji("neutral");
+    LOG_I("Xiaozhi stopped by trigger");
 }
 
 /* WebSocket communication functions */
@@ -590,7 +705,7 @@ void ws_send_listen_stop(void *ws, char *session_id)
                     if (!xz_wakeword_is_enabled())
                     {
                         LOG_D("Restarting wake word detection after listen stop");
-                        xz_wakeword_start();
+                        xiaozhi_wakeword_start_if_allowed();
                     }
                 }
                 else
@@ -734,8 +849,8 @@ err_t my_wsapp_fn(int code, char *buf, size_t len)
             }
         }
 
-        xiaozhi_ui_chat_status("   休眠中");
-        xiaozhi_ui_chat_output("等待唤醒");
+        xiaozhi_ui_chat_status("Sleeping");
+        xiaozhi_ui_chat_output("Waiting wake");
         xiaozhi_ui_update_emoji("sleepy");
         LOG_I("WebSocket closed\n");
         g_app.ws.is_connected = 0;
@@ -745,7 +860,7 @@ err_t my_wsapp_fn(int code, char *buf, size_t len)
         if (!xz_wakeword_is_enabled())
         {
             LOG_I("Starting wake word detection after disconnection");
-            xz_wakeword_start();
+            xiaozhi_wakeword_start_if_allowed();
         }
 
         /* Release write lock */
@@ -902,8 +1017,8 @@ void reconnect_websocket(void)
 
     // Reset state
     g_app.state = kDeviceStateUnknown;
-    xiaozhi_ui_chat_status("   连接失败");
-    xiaozhi_ui_chat_output("请重试");
+    xiaozhi_ui_chat_status("Connect failed");
+    xiaozhi_ui_chat_output("Please retry");
 }
 
 void xz_ws_audio_init(void)
@@ -1049,14 +1164,15 @@ void send_iot_descriptors(void)
 }
 
 /* Message processing functions */
-char *my_json_string(cJSON *json, char *key)
+char *my_json_string(cJSON *json, const char *key)
 {
+    static char empty_json[] = "";
     cJSON *item = cJSON_GetObjectItem(json, key);
     if (item && cJSON_IsString(item))
     {
         return item->valuestring;
     }
-    return "";
+    return empty_json;
 }
 
 void Message_handle(const uint8_t *data, uint16_t len)
@@ -1103,7 +1219,7 @@ void Message_handle(const uint8_t *data, uint16_t len)
         rt_bool_t pending_listen = g_app.pending_listen_start;
         if (!pending_listen && !in_listening)
         {
-            xiaozhi_ui_chat_status("   待命中");
+            xiaozhi_ui_chat_status("Idle");
             xiaozhi_ui_chat_output(" ");
             xiaozhi_ui_update_emoji("neutral");
             LOG_I("Waiting...\n");
@@ -1113,7 +1229,8 @@ void Message_handle(const uint8_t *data, uint16_t len)
             LOG_I("Pending wake-up detected on hello, preparing to listen\n");
         }
 
-        /* Initialize wake word detection once */
+        /* Initialize wake word detection only when background wakeword is enabled. */
+#if XIAOZHI_BACKGROUND_WAKEWORD_ENABLE
         if (!g_app.wakeword_initialized_session)
         {
             LOG_I("Initializing wake word detection...");
@@ -1124,7 +1241,7 @@ void Message_handle(const uint8_t *data, uint16_t len)
                 /* Start detection only if no pending listen */
                 if (!pending_listen && !in_listening)
                 {
-                    if (xz_wakeword_start() == 0)
+                    if (xiaozhi_wakeword_start_if_allowed() == 0)
                     {
                         LOG_D("Wake word detection started successfully");
                     }
@@ -1139,6 +1256,13 @@ void Message_handle(const uint8_t *data, uint16_t len)
                 LOG_E("Failed to initialize wake word detection");
             }
         }
+#else
+        if (!g_app.wakeword_initialized_session)
+        {
+            g_app.wakeword_initialized_session = 1;
+            LOG_I("Background wake word disabled; trigger Xiaozhi by screen button or gesture");
+        }
+#endif
         else
         {
             if (pending_listen)
@@ -1155,7 +1279,7 @@ void Message_handle(const uint8_t *data, uint16_t len)
                 if (!xz_wakeword_is_enabled() && !in_listening)
                 {
                     LOG_D("Restarting wake word detection");
-                    xz_wakeword_start();
+                    xiaozhi_wakeword_start_if_allowed();
                 }
             }
         }
@@ -1186,19 +1310,19 @@ void Message_handle(const uint8_t *data, uint16_t len)
             xz_mic(1);
             if (ws_send_listen_start(&g_app.ws.clnt, g_app.ws.session_id, kListeningModeAutoStop))
             {
-                xiaozhi_ui_chat_status("   聆听中");
-                xiaozhi_ui_chat_output("聆听中...");
+                xiaozhi_ui_chat_status("Listening");
+                xiaozhi_ui_chat_output("Listening...");
             }
             else
             {
                 LOG_W("Listen start failed after hello, falling back to idle");
                 g_app.state = kDeviceStateIdle;
                 xz_mic(0);
-                xiaozhi_ui_chat_status("   就绪");
-                xiaozhi_ui_chat_output("就绪");
+                xiaozhi_ui_chat_status("Ready");
+                xiaozhi_ui_chat_output("Ready");
                 if (!xz_wakeword_is_enabled())
                 {
-                    xz_wakeword_start();
+                    xiaozhi_wakeword_start_if_allowed();
                 }
             }
         }
@@ -1207,8 +1331,8 @@ void Message_handle(const uint8_t *data, uint16_t len)
     {
         /* Ensure mic is closed when entering sleep */
         xz_mic(0);
-        xiaozhi_ui_chat_status("   休眠中");
-        xiaozhi_ui_chat_output("等待唤醒");
+        xiaozhi_ui_chat_status("Sleeping");
+        xiaozhi_ui_chat_output("Waiting wake");
         xiaozhi_ui_update_emoji("sleepy");
         g_app.state = kDeviceStateUnknown;
         LOG_I("session ended\n");
@@ -1219,7 +1343,7 @@ void Message_handle(const uint8_t *data, uint16_t len)
         if (!xz_wakeword_is_enabled())
         {
             LOG_I("Starting wake word detection for sleep mode");
-            xz_wakeword_start();
+            xiaozhi_wakeword_start_if_allowed();
         }
     }
     else if (strcmp(type, "tts") == 0)
@@ -1236,7 +1360,7 @@ void Message_handle(const uint8_t *data, uint16_t len)
                 }
 
                 g_app.state = kDeviceStateSpeaking;
-                xiaozhi_ui_chat_status("   说话中");
+                xiaozhi_ui_chat_status("Speaking");
                 xz_speaker(1);
                 LOG_D("State transitioned to Speaking, microphone stopped\n");
 
@@ -1282,11 +1406,11 @@ void Message_handle(const uint8_t *data, uint16_t len)
             LOG_D("TTS stopped: mic enabled=%d, wakeword enabled=%d",
                   xz_mic_is_enabled(), xz_wakeword_is_enabled());
 
-            xiaozhi_ui_chat_status("   就绪");
-            xiaozhi_ui_chat_output("就绪");
+            xiaozhi_ui_chat_status("Ready");
+            xiaozhi_ui_chat_output("Ready");
             LOG_D("TTS stopped, state reset to Idle\n");
 
-#ifdef LX_LITEGFX_VGLITE_ENABLE
+#if defined(LX_LITEGFX_VGLITE_ENABLE) && XIAOZHI_3D_EMOJI_ENABLE
             qday_show_emoji_by_rtt_info(12);
 #endif
             /* Check if multi-turn conversation is enabled */
@@ -1306,16 +1430,16 @@ void Message_handle(const uint8_t *data, uint16_t len)
                     xz_mic(1);
                     if (ws_send_listen_start(&g_app.ws.clnt, g_app.ws.session_id, kListeningModeAutoStop))
                     {
-                        xiaozhi_ui_chat_status("   聆听中");
-                        xiaozhi_ui_chat_output("聆听中...");
+                        xiaozhi_ui_chat_status("Listening");
+                        xiaozhi_ui_chat_output("Listening...");
                     }
                     else
                     {
                         LOG_W("Listen start failed in TTS stop handler");
                         g_app.state = kDeviceStateIdle;
                         xz_mic(0);
-                        xiaozhi_ui_chat_status("   就绪");
-                        xiaozhi_ui_chat_output("就绪");
+                        xiaozhi_ui_chat_status("Ready");
+                        xiaozhi_ui_chat_output("Ready");
                     }
                 }
             }
@@ -1325,7 +1449,7 @@ void Message_handle(const uint8_t *data, uint16_t len)
                 if (!xz_wakeword_is_enabled())
                 {
                     LOG_I("Restarting wake word detection after conversation ends");
-                    if (xz_wakeword_start() == 0)
+                    if (xiaozhi_wakeword_start_if_allowed() == 0)
                     {
                         LOG_I("Wake word detection re-enabled successfully after conversation");
                     }
@@ -1581,9 +1705,15 @@ void xiaozhi_ws_connect(void)
         /* Check network connection status */
         if (!check_internet_access())
         {
-            LOG_I("Waiting internet ready... (%d retries remaining)\n", retry);
-            xiaozhi_ui_chat_status("   等待网络");
-            xiaozhi_ui_chat_output("检查网络连接...");
+            static rt_tick_t s_last_wait_log = 0;
+            rt_tick_t now = rt_tick_get();
+            if ((s_last_wait_log == 0) || ((now - s_last_wait_log) >= rt_tick_from_millisecond(XZ_NET_WAIT_LOG_INTERVAL_MS)))
+            {
+                s_last_wait_log = now;
+                LOG_W("Waiting internet ready... (%d retries remaining)\n", retry);
+            }
+            xiaozhi_ui_chat_status("Waiting network");
+            xiaozhi_ui_chat_output("Checking network...");
             rt_thread_mdelay(500); /* Reduced network check delay */
             continue;
         }
@@ -1659,7 +1789,7 @@ void xiaozhi_ws_connect(void)
         /* Connection failed, update UI status */
         if (retry > 0)
         {
-            xiaozhi_ui_chat_status("   连接失败");
+            xiaozhi_ui_chat_status("Connect failed");
             char retry_msg[64];
             rt_snprintf(retry_msg, sizeof(retry_msg), "Retrying... (%d)", 10 - retry);
             xiaozhi_ui_chat_output(retry_msg);
@@ -1669,14 +1799,15 @@ void xiaozhi_ws_connect(void)
 
     /* All retries failed */
     LOG_E("WebSocket connection failed after all attempts\n");
-    xiaozhi_ui_chat_status("   连接失败");
-    xiaozhi_ui_chat_output("请检查网络并重试");
+    xiaozhi_ui_chat_status("Connect failed");
+    xiaozhi_ui_chat_output("Check network and retry");
 }
 
 /* Application entry point */
 void xiaozhi_entry(void *p)
 {
     char *my_ota_version;
+    rt_tick_t last_wait_log = 0;
     while (1)
     {
         my_ota_version = get_xiaozhi_ws();
@@ -1688,7 +1819,13 @@ void xiaozhi_entry(void *p)
         }
         else
         {
-            LOG_E("Waiting internet... \n");
+            rt_tick_t now = rt_tick_get();
+            if ((last_wait_log == 0) ||
+                ((now - last_wait_log) >= rt_tick_from_millisecond(XZ_NET_WAIT_LOG_INTERVAL_MS)))
+            {
+                last_wait_log = now;
+                LOG_W("Waiting internet...");
+            }
             rt_thread_mdelay(1000);
         }
     }
@@ -1696,6 +1833,9 @@ void xiaozhi_entry(void *p)
 
 int ws_xiaozhi_init(void)
 {
+    xz_button_init();
+    xz_event_init();
+
     g_app.xiaozhi_tid = rt_thread_create("xiaozhi_thread", xiaozhi_entry,
                                          (void *)0x01, 1024 * 30, 15, 5);
     if (!g_app.xiaozhi_tid)
@@ -1729,18 +1869,22 @@ rt_bool_t xz_is_multi_turn_conversation_enabled(void)
 /* Audio notification functions */
 void xz_play_power_on_sound(void)
 {
+#if XIAOZHI_WAKE_SOUND_ENABLE
     LOG_I("Playing power-on sound");
     if (wavplayer_play("/webnet/power_on.wav") != 0)
     {
         LOG_W("Failed to play power-on sound");
     }
+#endif
 }
 
 void xz_play_wake_sound(void)
 {
+#if XIAOZHI_WAKE_SOUND_ENABLE
     LOG_D("Playing wake sound");
     if (wavplayer_play("/webnet/ding.wav") != 0)
     {
         LOG_W("Failed to play wake sound");
     }
+#endif
 }

@@ -42,6 +42,7 @@ static const char *s_preset_labels[] = {
 /* ── Helpers ────────────────────────────────────────────────────── */
 static void refresh_slot_card(int idx);
 static void show_edit_popup(int slot_idx);
+static void on_remind_fired(int slot_index, const cough_remind_slot_t *slot, void *user_data);
 
 /* ── Slot card click handler ────────────────────────────────────── */
 static void slot_edit_cb(lv_event_t *e)

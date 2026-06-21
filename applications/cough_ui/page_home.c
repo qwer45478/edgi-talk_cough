@@ -36,7 +36,7 @@ static lv_obj_t *s_label_env       = RT_NULL;
 static lv_obj_t *s_label_info      = RT_NULL;
 static lv_obj_t *s_label_remind    = RT_NULL;
 static lv_obj_t *s_label_time      = RT_NULL;  /* Time display label */
-static lv_obj_t *s_timer_time      = RT_NULL;  /* LVGL timer for time update */
+static lv_timer_t *s_timer_time    = RT_NULL;  /* LVGL timer for time update */
 
 /* State */
 static uint32_t  s_cough_count     = 0;
@@ -44,6 +44,8 @@ static rt_uint16_t s_last_peak     = 0;
 static rt_bool_t s_cough_flash     = RT_FALSE;
 static rt_tick_t s_cough_flash_tick = 0;
 static rt_uint32_t s_stat_bursts   = 0;
+static rt_bool_t s_chart_refresh_pending = RT_FALSE;
+static rt_tick_t s_last_chart_refresh_tick = 0;
 
 /* Level history for cough segment marking */
 static rt_uint16_t s_level_hist[CHART_POINT_COUNT];
@@ -344,7 +346,7 @@ void page_home_push_level(rt_uint16_t level)
         lv_chart_set_next_value(s_chart, s_ser, level);
         if (s_ser_cough)
             lv_chart_set_next_value(s_chart, s_ser_cough, LV_CHART_POINT_NONE);
-        lv_chart_refresh(s_chart);
+        s_chart_refresh_pending = RT_TRUE;
     }
 
     s_level_hist[s_hist_pos] = level;
@@ -476,6 +478,18 @@ void page_home_update_reminder(const char *label)
 
 void page_home_restore_flash(void)
 {
+    if (s_chart_refresh_pending)
+    {
+        rt_tick_t now = rt_tick_get();
+        if ((now - s_last_chart_refresh_tick) >= rt_tick_from_millisecond(120))
+        {
+            s_last_chart_refresh_tick = now;
+            s_chart_refresh_pending = RT_FALSE;
+            if (s_chart)
+                lv_chart_refresh(s_chart);
+        }
+    }
+
     if (s_cough_flash)
     {
         rt_tick_t now = rt_tick_get();
